@@ -15,6 +15,7 @@ export default class JcodePlugin extends Plugin {
 	private autoTagger: AutoTagger | null = null;
 	private statusBarItem: HTMLElement | null = null;
 	private currentRequestActive = false;
+	private lastAskSubmitAt = 0;
 	private todoTimer: number | null = null;
 	private lastSuggestion: TagSuggestion | null = null;
 
@@ -75,14 +76,20 @@ export default class JcodePlugin extends Plugin {
 			if (evt.key !== "Enter") return;
 			if (!(evt.ctrlKey || evt.metaKey)) return;
 			if (evt.shiftKey || evt.altKey) return;
+			if (evt.repeat) return;
 			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 			if (!view) return;
 			evt.preventDefault();
 			evt.stopPropagation();
+			evt.stopImmediatePropagation();
 			void this.submitAskJcode(view.editor, view);
 		};
+		window.addEventListener("keydown", askHotkeyHandler, true);
 		document.addEventListener("keydown", askHotkeyHandler, true);
-		this.register(() => document.removeEventListener("keydown", askHotkeyHandler, true));
+		this.register(() => {
+			window.removeEventListener("keydown", askHotkeyHandler, true);
+			document.removeEventListener("keydown", askHotkeyHandler, true);
+		});
 
 		// Layer-2: cancel in-flight request.
 		this.addCommand({
@@ -245,12 +252,18 @@ export default class JcodePlugin extends Plugin {
 	}
 
 	private async submitAskJcode(editor: Editor, view: MarkdownView) {
+		const now = Date.now();
+		if (now - this.lastAskSubmitAt < 1000) return;
+		this.lastAskSubmitAt = now;
+
 		if (!findTrigger(editor)) {
 			new Notice('jcode: no "/askjcode ..." line at cursor. Type /askjcode then your question.');
 			return;
 		}
 		if (this.currentRequestActive) {
-			new Notice("jcode: a request is already in flight. Wait or cancel.");
+			// If another real request is running, update the status bar but avoid
+			// toast spam from key repeats or command+DOM double dispatch.
+			this.statusBarItem?.setText("jcode: request already running");
 			return;
 		}
 		if (!this.transport) {
@@ -264,7 +277,6 @@ export default class JcodePlugin extends Plugin {
 		const noteText = editor.getValue();
 
 		this.currentRequestActive = true;
-		new Notice("jcode: started. Response will be inserted below the /askjcode line.");
 		try {
 			const inserted = await runAskJcode(
 				{
