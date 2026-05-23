@@ -188,6 +188,15 @@ function testSectionInternals() {
 	const e = new FakeEditor("# Top\ntext\n## Child ##\n/askjcode hi");
 	eq(_internals.findSectionTitle(e as never, 3), "Child", "section title strips trailing hashes");
 	eq(_internals.renderStatusBlock("Child", "connecting…"), "> [!jcode]+ Child\n> _jcode: connecting…_\n", "status block render");
+	const live = _internals.renderLiveBlock("Child", "Hello\nWorld", new Map([
+		["connection", "streaming…"],
+		["tool:bash", "tool bash: running"],
+	]));
+	eq(live.includes("> Hello"), true, "live block includes first feedback line");
+	eq(live.includes("> World"), true, "live block includes later feedback line");
+	eq(live.includes("_jcode: streaming…_"), true, "live block includes status");
+	eq(live.includes("_jcode: tool bash: running_"), true, "live block includes tool status");
+	eq(_internals.activityKey("  A   Status  "), "a status", "activity key normalizes whitespace");
 }
 
 (async () => {

@@ -173,6 +173,8 @@ class ReplTransport implements JcodeTransport {
 		onEvent: (e: JcodeEvent) => void;
 		text: string;
 		timer: NodeJS.Timeout | null;
+		idleTimer: NodeJS.Timeout | null;
+		seenFeedback: boolean;
 	} | null = null;
 	constructor(private bin: string) {}
 
@@ -224,7 +226,7 @@ class ReplTransport implements JcodeTransport {
 				this.pending = null;
 				reject(new Error(e.message));
 			}, timeoutMs) : null;
-			this.pending = { resolve, reject, onEvent, text: "", timer };
+			this.pending = { resolve, reject, onEvent, text: "", timer, idleTimer: null, seenFeedback: false };
 		});
 		this.child.stdin.write(replWirePrompt(opts.message) + "\n");
 		return promise;
@@ -260,19 +262,15 @@ class ReplTransport implements JcodeTransport {
 			const pending = this.pending;
 			const onEvent = pending?.onEvent ?? fallbackOnEvent;
 			if (!onEvent) continue;
+			if (pending) this.markReplFeedback(pending);
 			if (line.startsWith("[Tokens]")) {
-				const e: JcodeEvent = { type: "end", text: pending?.text.trim() ?? "" };
-				onEvent(e);
-				if (pending) {
-					if (pending.timer) clearTimeout(pending.timer);
-					pending.resolve(e);
-					this.pending = null;
-				}
+				if (pending) this.finishPendingRepl(pending, onEvent);
 				continue;
 			}
 			const norm = tryNormaliseJsonLine(line);
 			if (norm) {
 				onEvent(norm);
+				if (norm.type === "end" && pending) this.finishPendingRepl(pending, onEvent, norm.text);
 				continue;
 			}
 			const text = normaliseReplTextLine(line, pending?.text ?? "");
@@ -281,6 +279,29 @@ class ReplTransport implements JcodeTransport {
 			if (pending) pending.text += e.text;
 			onEvent(e);
 		}
+	}
+
+	private markReplFeedback(pending: NonNullable<ReplTransport["pending"]>) {
+		pending.seenFeedback = true;
+		if (pending.idleTimer) clearTimeout(pending.idleTimer);
+		pending.idleTimer = setTimeout(() => {
+			if (this.pending !== pending || !pending.seenFeedback) return;
+			this.finishPendingRepl(pending, pending.onEvent);
+		}, 1000);
+	}
+
+	private finishPendingRepl(
+		pending: NonNullable<ReplTransport["pending"]>,
+		onEvent: (e: JcodeEvent) => void,
+		textOverride?: string
+	) {
+		if (this.pending !== pending) return;
+		if (pending.timer) clearTimeout(pending.timer);
+		if (pending.idleTimer) clearTimeout(pending.idleTimer);
+		const e: JcodeEvent = { type: "end", text: (textOverride ?? pending.text).trim() };
+		onEvent(e);
+		pending.resolve(e);
+		this.pending = null;
 	}
 }
 

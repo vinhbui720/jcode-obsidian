@@ -72,44 +72,53 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	let accumulated = "";
 	let sessionId = deps.resumeSessionId;
 	let errored = false;
+	const activities = new Map<string, string>();
+	activities.set("connection", "connecting…");
 
 	const onEvent = (e: JcodeEvent) => {
 			switch (e.type) {
 				case "start":
-				if (e.sessionId) {
-					sessionId = e.sessionId;
-					deps.saveSessionId?.(e.sessionId);
-				}
+					if (e.sessionId) {
+						sessionId = e.sessionId;
+						deps.saveSessionId?.(e.sessionId);
+					}
 					deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
-					updateLiveStatus(ctx.editor, live, title, `${e.model || e.provider || "ready"} streaming…`);
+					activities.set("connection", `${e.model || e.provider || "ready"} streaming…`);
+					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
 					break;
 				case "status":
 					deps.statusBar.setText(`jcode: ${e.detail}`);
-					updateLiveStatus(ctx.editor, live, title, e.detail);
+					activities.set(`status:${activityKey(e.detail)}`, e.detail);
+					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
 					break;
 				case "delta":
 					accumulated += e.text;
 					deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
-					updateLiveStatus(ctx.editor, live, title, `writing… ${accumulated.length} chars`);
+					activities.set("writing", `writing… ${accumulated.length} chars`);
+					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
 					break;
 				case "tool":
 					deps.statusBar.setText(
 						`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
 					);
-					updateLiveStatus(ctx.editor, live, title, `tool ${e.name} ${e.status === "start" ? "running" : "done"}`);
+					activities.set(`tool:${e.name || "unknown"}`, `tool ${e.name || "unknown"}: ${e.status === "start" ? "running" : "done"}${e.summary ? ` — ${e.summary}` : ""}`);
+					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
 					break;
 				case "end":
 					if (e.text) accumulated = e.text;
 					deps.statusBar.setText("jcode: done");
-					updateLiveStatus(ctx.editor, live, title, "done, inserting answer…");
+					activities.set("connection", "done, inserting answer…");
+					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
 					break;
 				case "error":
 					errored = true;
 					deps.statusBar.setText(`jcode: error`);
-					updateLiveStatus(ctx.editor, live, title, "error");
+					activities.set("connection", "error");
+					activities.set("error", e.message);
+					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
 					break;
-		}
-	};
+			}
+		};
 
 	const askOpts: AskOptions = {
 		message: composed,
@@ -127,7 +136,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 			`jcode error: ${err instanceof Error ? err.message : String(err)}`;
 	}
 
-	replaceLiveStatusWithCallout(ctx.editor, live, title, accumulated, errored);
+	replaceLiveStatusWithCallout(ctx.editor, live, title, accumulated, errored, activities);
 
 	setTimeout(() => deps.statusBar.clear(), 4000);
 	return true;
@@ -224,13 +233,19 @@ function insertLiveStatus(
 	status: string
 ): LiveBlock {
 	const insertAtLine = triggerLine + 1;
-	const block = renderStatusBlock(title, status);
+	const block = renderLiveBlock(title, "", new Map([["connection", status]]));
 	editor.replaceRange(block, { line: insertAtLine, ch: 0 }, { line: insertAtLine, ch: 0 });
 	return { startLine: insertAtLine, lineCount: block.split("\n").length - 1 };
 }
 
-function updateLiveStatus(editor: Editor, live: LiveBlock, title: string, status: string) {
-	const block = renderStatusBlock(title, status);
+function updateLiveTranscript(
+	editor: Editor,
+	live: LiveBlock,
+	title: string,
+	text: string,
+	activities: Map<string, string>
+) {
+	const block = renderLiveBlock(title, text, activities);
 	replaceLiveBlock(editor, live, block);
 }
 
@@ -239,16 +254,20 @@ function replaceLiveStatusWithCallout(
 	live: LiveBlock,
 	title: string,
 	text: string,
-	errored: boolean
+	errored: boolean,
+	activities: Map<string, string>
 ) {
 	const kind = errored ? "danger" : "jcode";
 	const label = errored ? `${title} error` : title;
 	const safe = text.trim() || (errored ? "(no output)" : "(empty response)");
-	const quoted = safe
-		.split("\n")
-		.map((l) => `> ${l}`)
-		.join("\n");
-	replaceLiveBlock(editor, live, `> [!${kind}]+ ${label}\n${quoted}\n`);
+	const lines = [`> [!${kind}]+ ${label}`];
+	for (const l of safe.split("\n")) lines.push(`> ${l}`);
+	const finalActivities = Array.from(activities.entries()).filter(([k]) => k !== "writing");
+	if (finalActivities.length > 0) {
+		lines.push(">");
+		for (const [, value] of finalActivities) lines.push(`> _jcode: ${value}_`);
+	}
+	replaceLiveBlock(editor, live, `${lines.join("\n")}\n`);
 }
 
 function replaceLiveBlock(editor: Editor, live: LiveBlock, replacement: string) {
@@ -264,6 +283,20 @@ function renderStatusBlock(title: string, status: string): string {
 	return `> [!jcode]+ ${title}\n> _jcode: ${status}_\n`;
 }
 
+function renderLiveBlock(title: string, text: string, activities: Map<string, string>): string {
+	const lines = [`> [!jcode]+ ${title}`];
+	if (text.trim()) {
+		for (const l of text.trimEnd().split("\n")) lines.push(`> ${l}`);
+		lines.push(">");
+	}
+	for (const [, value] of activities) lines.push(`> _jcode: ${value}_`);
+	return `${lines.join("\n")}\n`;
+}
+
+function activityKey(s: string): string {
+	return s.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 80) || "status";
+}
+
 function findSectionTitle(editor: Editor, triggerLine: number): string | null {
 	for (let i = triggerLine; i >= 0; i--) {
 		const line = editor.getLine(i);
@@ -275,4 +308,4 @@ function findSectionTitle(editor: Editor, triggerLine: number): string | null {
 
 // Exposed for tests.
 export const _parseLine = parseLine;
-export const _internals = { findSectionTitle, renderStatusBlock };
+export const _internals = { findSectionTitle, renderStatusBlock, renderLiveBlock, activityKey };
