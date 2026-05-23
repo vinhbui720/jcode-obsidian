@@ -45,6 +45,14 @@ export interface JcodeSettings {
 	autoTagEnabled: boolean;
 	autoTagMode: "suggest" | "auto";
 	autoTagOnCreate: boolean;
+
+	/** B5 — Spaced repetition daily picker. */
+	spacedRepEnabled: boolean;
+	spacedRepOutputPath: string;
+	spacedRepDailyPickCount: number;
+	spacedRepDefaultInterval: number;
+	spacedRepTagBoost: number;
+	spacedRepIgnoreGlobs: string;
 }
 
 export const DEFAULT_SETTINGS: JcodeSettings = {
@@ -66,6 +74,12 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	autoTagEnabled: true,
 	autoTagMode: "suggest",
 	autoTagOnCreate: true,
+	spacedRepEnabled: true,
+	spacedRepOutputPath: "today-review.md",
+	spacedRepDailyPickCount: 5,
+	spacedRepDefaultInterval: 7,
+	spacedRepTagBoost: 1.5,
+	spacedRepIgnoreGlobs: "templates/**\n.trash/**\ntoday-review.md",
 };
 
 export class JcodeSettingTab extends PluginSettingTab {
@@ -318,6 +332,71 @@ export class JcodeSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.autoTagOnCreate).onChange(async (v) => {
 					this.plugin.settings.autoTagOnCreate = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		containerEl.createEl("h3", { text: "B5 — Spaced repetition daily picker (no AI)" });
+		containerEl.createEl("p", {
+			text: "Picks notes to review each day from frontmatter dates and tags, then writes a managed block to a review note. Zero LLM cost.",
+		});
+		new Setting(containerEl)
+			.setName("Enable spaced-rep picker")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.spacedRepEnabled).onChange(async (v) => {
+					this.plugin.settings.spacedRepEnabled = v;
+					await this.plugin.saveSettings();
+				})
+			);
+		new Setting(containerEl)
+			.setName("Output note path")
+			.addText((t) =>
+				t.setPlaceholder("today-review.md")
+					.setValue(this.plugin.settings.spacedRepOutputPath)
+					.onChange(async (v) => {
+						this.plugin.settings.spacedRepOutputPath = v.trim() || "today-review.md";
+						await this.plugin.saveSettings();
+					})
+			);
+		new Setting(containerEl)
+			.setName("Daily pick count")
+			.addText((t) =>
+				t.setValue(String(this.plugin.settings.spacedRepDailyPickCount)).onChange(async (v) => {
+					const n = Number.parseInt(v, 10);
+					if (Number.isFinite(n) && n > 0) {
+						this.plugin.settings.spacedRepDailyPickCount = n;
+						await this.plugin.saveSettings();
+					}
+				})
+			);
+		new Setting(containerEl)
+			.setName("Default interval days")
+			.addText((t) =>
+				t.setValue(String(this.plugin.settings.spacedRepDefaultInterval)).onChange(async (v) => {
+					const n = Number.parseInt(v, 10);
+					if (Number.isFinite(n) && n > 0) {
+						this.plugin.settings.spacedRepDefaultInterval = n;
+						await this.plugin.saveSettings();
+					}
+				})
+			);
+		new Setting(containerEl)
+			.setName("#spaced-rep tag boost")
+			.addText((t) =>
+				t.setValue(String(this.plugin.settings.spacedRepTagBoost)).onChange(async (v) => {
+					const n = Number.parseFloat(v);
+					if (Number.isFinite(n) && n > 0) {
+						this.plugin.settings.spacedRepTagBoost = n;
+						await this.plugin.saveSettings();
+					}
+				})
+			);
+		new Setting(containerEl)
+			.setName("Ignore globs")
+			.setDesc("One glob per line.")
+			.addTextArea((t) =>
+				t.setValue(this.plugin.settings.spacedRepIgnoreGlobs).onChange(async (v) => {
+					this.plugin.settings.spacedRepIgnoreGlobs = v;
 					await this.plugin.saveSettings();
 				})
 			);

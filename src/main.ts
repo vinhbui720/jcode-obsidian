@@ -5,6 +5,7 @@ import { createTransport, JcodeTransport } from "./jcode-client";
 import { runAskJcode } from "./askjcode";
 import { TodoAggregator } from "./todo-aggregator";
 import { AutoTagger, TagSuggestion } from "./auto-tagger";
+import { SpacedRepPicker } from "./spaced-rep";
 
 export default class JcodePlugin extends Plugin {
 	settings: JcodeSettings = DEFAULT_SETTINGS;
@@ -139,6 +140,25 @@ export default class JcodePlugin extends Plugin {
 		// Initial aggregation a few seconds after load (let metadataCache warm up).
 		if (this.settings.todoEnabled) {
 			window.setTimeout(() => void this.runTodoAggregator(false), 3000);
+		}
+
+		// B5: spaced-repetition daily picker.
+		this.addCommand({
+			id: "jcode-spaced-rep-rebuild",
+			name: "Spaced-rep: rebuild today's picks now",
+			callback: () => void this.runSpacedRep(true),
+		});
+		this.addCommand({
+			id: "jcode-spaced-rep-mark-reviewed",
+			name: "Spaced-rep: mark current note as reviewed today",
+			editorCallback: async (_editor, view) => {
+				const file = view instanceof MarkdownView ? view.file : null;
+				if (!file) return;
+				await this.markSpacedRepReviewed(file);
+			},
+		});
+		if (this.settings.spacedRepEnabled) {
+			window.setTimeout(() => void this.runSpacedRepOncePerDay(), 4000);
 		}
 
 		// B2 auto-tag: command palette entries.
@@ -308,6 +328,61 @@ export default class JcodePlugin extends Plugin {
 		} catch (err) {
 			console.error("[jcode-obsidian] todo aggregator failed:", err);
 			if (announce) new Notice("jcode: TODO aggregator failed (see console)");
+		}
+	}
+
+	private makeSpacedRepPicker() {
+		return new SpacedRepPicker({
+			app: this.app,
+			getSettings: () => ({
+				outputPath: this.settings.spacedRepOutputPath,
+				ignore: this.settings.spacedRepIgnoreGlobs
+					.split("\n")
+					.map((s) => s.trim())
+					.filter(Boolean),
+				dailyPickCount: this.settings.spacedRepDailyPickCount,
+				defaultIntervalDays: this.settings.spacedRepDefaultInterval,
+				tagBoost: this.settings.spacedRepTagBoost,
+			}),
+			notify: (m) => new Notice(m),
+		});
+	}
+
+	private async runSpacedRep(announce: boolean) {
+		if (!this.settings.spacedRepEnabled) return;
+		try {
+			const res = await this.makeSpacedRepPicker().rebuild();
+			if (announce) {
+				new Notice(
+					`jcode: spaced-rep updated → ${res.outputPath} (${res.picks.length} picks)`
+				);
+			}
+		} catch (err) {
+			console.error("[jcode-obsidian] spaced-rep failed:", err);
+			if (announce) new Notice("jcode: spaced-rep failed (see console)");
+		}
+	}
+
+	private async runSpacedRepOncePerDay() {
+		const today = new Date().toISOString().slice(0, 10);
+		const data = (await this.loadData()) as JcodeSettings & { lastSpacedRepRunDate?: string };
+		if (data?.lastSpacedRepRunDate === today) return;
+		await this.runSpacedRep(false);
+		this.settings = { ...this.settings, lastSpacedRepRunDate: today } as JcodeSettings & { lastSpacedRepRunDate: string };
+		await this.saveData(this.settings);
+	}
+
+	private async markSpacedRepReviewed(file: TFile) {
+		if (!this.settings.spacedRepEnabled) {
+			new Notice("jcode spaced-rep is disabled in settings.");
+			return;
+		}
+		try {
+			await this.makeSpacedRepPicker().markReviewed(file);
+			new Notice(`jcode: marked reviewed → ${file.basename}`);
+		} catch (err) {
+			console.error("[jcode-obsidian] mark reviewed failed:", err);
+			new Notice("jcode: mark reviewed failed (see console)");
 		}
 	}
 }

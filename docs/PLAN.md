@@ -70,3 +70,47 @@ Therefore M2 ships **two transports**, with stdio as the default:
 The plugin's `askjcode` command queries `settings.transport`; both code paths
 produce `panel.message`-shaped events internally so the rendering layer stays
 identical.
+
+## M4 shipped: B2 auto-tag from title (2026-05-23)
+
+Auto-tag is implemented as a low-token jcode call:
+
+- Input is only note title + deduped existing tag pool, capped to 80 tags.
+- Output contract is strict JSON: `{ "tags": [...] }`, 1-3 tags.
+- Default UX is `suggest`, not auto-write. User can run **Auto-tag: apply last suggestion**.
+- `auto` mode is opt-in and writes `fm.tags` through Obsidian `processFrontMatter`.
+- New-note trigger waits 8s so metadata and title settle.
+
+## M6 shipped: B5 spaced-repetition picker (2026-05-23)
+
+Spaced repetition is intentionally script-only, zero AI cost:
+
+- Reads frontmatter `last-reviewed`, `review-interval-days`, `spaced-rep`, `tags` and file `mtime`.
+- Never-reviewed notes are highest priority.
+- Reviewed notes rank by overdue days, edit age, and optional `#spaced-rep` boost.
+- Anti-clustering penalty reduces repeat picks from the same folder.
+- Writes a managed block to `today-review.md` by default:
+  `<!-- jcode-spaced-rep:start --> ... <!-- jcode-spaced-rep:end -->`.
+- Preserves user text outside the managed block.
+- Commands:
+  - **Spaced-rep: rebuild today's picks now**
+  - **Spaced-rep: mark current note as reviewed today**
+- Runs once per day on plugin load using plugin data key `lastSpacedRepRunDate`.
+
+## M5 pivot: SurfSense as NotebookLM alternative (2026-05-23)
+
+User proposed <https://github.com/MODSetter/SurfSense> as an alternative to NotebookLM.
+This looks better for the long-term A2 sidebar than NotebookLM browser automation:
+
+- SurfSense is open source and self-hostable.
+- It explicitly supports Obsidian/local-folder sync, so the vault can be indexed without scraping NotebookLM UI.
+- It supports cited answers and hybrid search, matching the A2 requirement.
+- It has a `surfsense_backend` service, likely a cleaner REST/FastAPI integration surface than the NotebookLM skill's Playwright session.
+
+Updated M5 direction:
+
+- Rename implementation concept from `NotebookLMClient` to backend-neutral `KnowledgeBackend`.
+- Settings should include `knowledgeBackend: "surfsense" | "notebooklm" | "jcode"`.
+- Prefer SurfSense if the user has a local/cloud SurfSense URL + token configured.
+- Keep NotebookLM as fallback via existing `/notebooklm` skill, not primary.
+- Do not bundle or install SurfSense inside the plugin; plugin should only call its API and document how to point SurfSense Desktop/local-folder sync at the Obsidian vault.
