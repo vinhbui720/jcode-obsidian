@@ -73,7 +73,7 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	todoRunOnSave: false,
 	autoTagEnabled: true,
 	autoTagMode: "suggest",
-	autoTagOnCreate: true,
+	autoTagOnCreate: false,
 	spacedRepEnabled: true,
 	spacedRepOutputPath: "today-review.md",
 	spacedRepDailyPickCount: 5,

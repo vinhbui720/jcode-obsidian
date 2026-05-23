@@ -277,6 +277,7 @@ export default class JcodePlugin extends Plugin {
 		this.lastAskSubmitAt = now;
 
 		if (!findTrigger(editor)) {
+			if (await this.maybeAutoTagEmptyNote(editor, view)) return;
 			new Notice('jcode: no "/askjcode ..." line at cursor. Type /askjcode then your question.');
 			return;
 		}
@@ -325,6 +326,16 @@ export default class JcodePlugin extends Plugin {
 		} finally {
 			this.currentRequestActive = false;
 		}
+	}
+
+	private async maybeAutoTagEmptyNote(editor: Editor, view: MarkdownView): Promise<boolean> {
+		const file = view.file;
+		if (!file || file.extension !== "md") return false;
+		if (!this.settings.autoTagEnabled) return false;
+		if (editor.getValue().trim() !== "") return false;
+		new Notice("jcode auto-tag: empty note detected, suggesting tags from title only.");
+		await this.suggestTagsFor(file, true);
+		return true;
 	}
 
 	private async suggestTagsFor(f: TFile, manual: boolean) {

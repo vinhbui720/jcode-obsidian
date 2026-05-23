@@ -238,7 +238,7 @@ class ReplTransport implements JcodeTransport {
 		if (this.sessionId) args.push("--resume", this.sessionId);
 		this.child = spawn(this.bin, args, {
 			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, JCODE_NON_INTERACTIVE: "1" },
+			env: { ...process.env, JCODE_NON_INTERACTIVE: "1", COLUMNS: "10000" },
 		});
 		this.child.stdout!.on("data", (b: Buffer) => this.handleOutput(b.toString(), onEvent));
 		this.child.stderr!.on("data", (b: Buffer) => this.handleOutput(b.toString(), onEvent));
@@ -275,11 +275,25 @@ class ReplTransport implements JcodeTransport {
 				onEvent(norm);
 				continue;
 			}
-			const e: JcodeEvent = { type: "delta", text: line + "\n" };
+			const text = normaliseReplTextLine(line, pending?.text ?? "");
+			if (!text) continue;
+			const e: JcodeEvent = { type: "delta", text };
 			if (pending) pending.text += e.text;
 			onEvent(e);
 		}
 	}
+}
+
+function normaliseReplTextLine(line: string, previous: string): string {
+	// `jcode repl` is terminal-oriented, so it may prefix assistant output with
+	// a prompt marker (`> `) and hard-wrap long prose at the terminal width:
+	//   Hello again! What
+	//   would you like...
+	// For inline Obsidian callouts we want prose, not terminal wrapping.
+	let text = line.replace(/^>\s?/, "").trim();
+	if (!text) return "";
+	if (!previous || /\s$/.test(previous) || /^[,.;:!?)]/.test(text)) return text;
+	return " " + text;
 }
 
 function replWirePrompt(prompt: string): string {
@@ -387,3 +401,4 @@ function normaliseEvent(raw: Record<string, unknown>): JcodeEvent | null {
 
 // Exposed for tests.
 export const _normaliseEvent = normaliseEvent;
+export const _internals = { normaliseReplTextLine };

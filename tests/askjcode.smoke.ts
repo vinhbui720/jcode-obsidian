@@ -3,7 +3,7 @@
  * Run: npx tsx tests/askjcode.smoke.ts
  */
 import { _internals, _parseLine, insertCallout, runAskJcode } from "../src/askjcode";
-import { _normaliseEvent } from "../src/jcode-client";
+import { _internals as clientInternals, _normaliseEvent } from "../src/jcode-client";
 
 let failures = 0;
 function eq<T>(a: T, b: T, label: string) {
@@ -91,6 +91,13 @@ function testNormaliseEvent() {
 		},
 		"normalise: done → end with tokens"
 	);
+}
+
+function testReplLineNormalisation() {
+	eq(clientInternals.normaliseReplTextLine("> Hello again! What", ""), "Hello again! What", "repl: strips prompt marker");
+	eq(clientInternals.normaliseReplTextLine("would you like", "Hello again! What"), " would you like", "repl: joins wrapped prose with space");
+	eq(clientInternals.normaliseReplTextLine("?", "Hello"), "?", "repl: punctuation attaches without space");
+	eq(clientInternals.normaliseReplTextLine("   ", "Hello"), "", "repl: ignores blank lines");
 }
 
 // ---------- insertCallout (with a fake editor) ----------
@@ -186,6 +193,7 @@ function testSectionInternals() {
 (async () => {
 	testParseLine();
 	testNormaliseEvent();
+	testReplLineNormalisation();
 	testInsertCallout();
 	testSectionInternals();
 	await testRunAskJcodeLiveBlock();
