@@ -11,11 +11,23 @@ export interface JcodeSettings {
 	/** Maximum characters of selection to include in broadcast. */
 	maxSelectionChars: number;
 
-	/** Layer 2: pairing host (jcode server). Empty until paired. */
+	/** Layer 2: which transport /askjcode uses. */
+	transport: "stdio" | "websocket";
+
+	/** Path to the jcode CLI binary (used by stdio transport). */
+	jcodeBinary: string;
+
+	/** Layer 2 websocket only: pairing host (jcode gateway). */
 	pairingHost: string;
 
-	/** Layer 2: pairing token issued by `jcode pair`. */
+	/** Layer 2 websocket only: pairing token issued by `jcode pair`. */
 	pairingToken: string;
+
+	/** Provider override (-p flag). Empty = auto. */
+	provider: string;
+
+	/** When set, /askjcode resumes this session to keep conversation state. */
+	resumeSessionId: string;
 
 	/** Hotkey for /askjcode submit. (Display only; actual key bound via command.) */
 	askjcodeHotkeyHint: string;
@@ -28,8 +40,12 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	contextBroadcastEnabled: true,
 	contextFilePath: "",
 	maxSelectionChars: 12000,
+	transport: "stdio",
+	jcodeBinary: "jcode",
 	pairingHost: "",
 	pairingToken: "",
+	provider: "",
+	resumeSessionId: "",
 	askjcodeHotkeyHint: "Ctrl+Enter (on a /askjcode line)",
 	statusBarStreaming: true,
 };
@@ -94,27 +110,91 @@ export class JcodeSettingTab extends PluginSettingTab {
 				})
 			);
 
-		containerEl.createEl("h3", { text: "Layer 2 — Pairing (WebSocket)" });
-		containerEl.createEl("p", {
-			text: "Run `jcode pair` in a terminal, then paste the host and token here. Pairing enables /askjcode.",
-		});
+		containerEl.createEl("h3", { text: "Layer 2 — /askjcode (transport)" });
 
 		new Setting(containerEl)
-			.setName("Pairing host")
-			.setDesc("e.g. ws://127.0.0.1:7878 or wss://... (issued by `jcode pair`)")
+			.setName("Transport")
+			.setDesc(
+				"How /askjcode talks to jcode. 'stdio' spawns the jcode CLI (zero setup). 'websocket' connects to the jcode gateway (requires JCODE_GATEWAY_ENABLED=1 and pairing)."
+			)
+			.addDropdown((dd) =>
+				dd
+					.addOption("stdio", "stdio (spawn jcode CLI)")
+					.addOption("websocket", "websocket (gateway pair)")
+					.setValue(this.plugin.settings.transport)
+					.onChange(async (v) => {
+						this.plugin.settings.transport = v as "stdio" | "websocket";
+						await this.plugin.saveSettings();
+						this.plugin.rebuildTransport();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("jcode binary path")
+			.setDesc("Used by stdio transport. Defaults to `jcode` on PATH.")
 			.addText((t) =>
 				t
-					.setPlaceholder("ws://127.0.0.1:7878")
-					.setValue(this.plugin.settings.pairingHost)
+					.setPlaceholder("jcode")
+					.setValue(this.plugin.settings.jcodeBinary)
 					.onChange(async (v) => {
-						this.plugin.settings.pairingHost = v.trim();
+						this.plugin.settings.jcodeBinary = v.trim() || "jcode";
+						await this.plugin.saveSettings();
+						this.plugin.rebuildTransport();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Provider (-p flag)")
+			.setDesc(
+				"Optional. e.g. claude, openai, copilot. Leave blank to let jcode auto-select."
+			)
+			.addText((t) =>
+				t
+					.setPlaceholder("(auto)")
+					.setValue(this.plugin.settings.provider)
+					.onChange(async (v) => {
+						this.plugin.settings.provider = v.trim();
 						await this.plugin.saveSettings();
 					})
 			);
 
 		new Setting(containerEl)
+			.setName("Resume session id")
+			.setDesc(
+				"If set, /askjcode resumes this session so prior turns stay in context. Auto-filled after first /askjcode."
+			)
+			.addText((t) =>
+				t
+					.setPlaceholder("(none)")
+					.setValue(this.plugin.settings.resumeSessionId)
+					.onChange(async (v) => {
+						this.plugin.settings.resumeSessionId = v.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		containerEl.createEl("h4", { text: "WebSocket transport (advanced)" });
+		containerEl.createEl("p", {
+			text: "Only required if transport=websocket. Run `jcode pair` in a terminal, then paste the host and token here.",
+		});
+
+		new Setting(containerEl)
+			.setName("Pairing host")
+			.setDesc("e.g. ws://127.0.0.1:7643 (issued by `jcode pair`)")
+			.addText((t) =>
+				t
+					.setPlaceholder("ws://127.0.0.1:7643")
+					.setValue(this.plugin.settings.pairingHost)
+					.onChange(async (v) => {
+						this.plugin.settings.pairingHost = v.trim();
+						await this.plugin.saveSettings();
+						this.plugin.rebuildTransport();
+					})
+			);
+
+		new Setting(containerEl)
 			.setName("Pairing token")
-			.setDesc("Token from `jcode pair`. Kept in local Obsidian data only.")
+			.setDesc("Token from `jcode pair`. Stored only in this vault's plugin data.")
 			.addText((t) =>
 				t
 					.setPlaceholder("(empty until paired)")
@@ -122,6 +202,7 @@ export class JcodeSettingTab extends PluginSettingTab {
 					.onChange(async (v) => {
 						this.plugin.settings.pairingToken = v.trim();
 						await this.plugin.saveSettings();
+						this.plugin.rebuildTransport();
 					})
 			);
 

@@ -49,12 +49,24 @@ Decided via `/grill-me` session on 2026-05-23.
 - B4 inbox processor
 - C1-C4 mesh send-note / quick-capture (reconsider after MVP)
 
-## Milestone commits
+## M2 transport decision (2026-05-23, follow-up)
 
-- `M0`: scaffold (this commit).
-- `M1`: A3 context broadcast working, verified.
-- `M2`: pairing flow + `/askjcode` inline command + callout insert.
-- `M3`: B3 TODO aggregator.
-- `M4`: B2 auto-tag.
-- `M5`: A2 NotebookLM chat sidebar.
-- `M6`: B5 spaced-rep picker.
+Verified state of jcode v0.12.3:
+
+- `~/.jcode/config.toml [gateway] enabled = false port = 7643 bind_addr = "0.0.0.0"`.
+  Gateway is opt-in; we cannot assume WebSocket is available on a clean install.
+- `jcode://pair?host=` URL scheme exists in the binary, but the pairing handshake
+  is not yet publicly documented.
+- `jcode run -m <message>` and `jcode debug message <text>` both exist and stream
+  JSON/text output to stdout reliably without any extra setup.
+
+Therefore M2 ships **two transports**, with stdio as the default:
+
+| Transport | Default? | When to use | How |
+|---|---|---|---|
+| `stdio` (child process) | yes | Same-machine, zero setup | spawn `jcode run --quiet -m <prompt>` |
+| `websocket` (gateway pair) | opt-in | Cross-machine, real-time | requires `JCODE_GATEWAY_ENABLED=1`, then `jcode pair` |
+
+The plugin's `askjcode` command queries `settings.transport`; both code paths
+produce `panel.message`-shaped events internally so the rendering layer stays
+identical.
