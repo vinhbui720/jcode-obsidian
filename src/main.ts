@@ -1,8 +1,8 @@
-import { Plugin, Notice, MarkdownView, TFile } from "obsidian";
+import { Plugin, Notice, MarkdownView, TFile, type Editor } from "obsidian";
 import { ContextBroadcaster, ViewWithEditor } from "./context-broadcaster";
 import { DEFAULT_SETTINGS, JcodeSettings, JcodeSettingTab } from "./settings";
 import { createTransport, JcodeTransport } from "./jcode-client";
-import { runAskJcode } from "./askjcode";
+import { findTrigger, runAskJcode } from "./askjcode";
 import { TodoAggregator } from "./todo-aggregator";
 import { AutoTagger, TagSuggestion } from "./auto-tagger";
 import { SpacedRepPicker } from "./spaced-rep";
@@ -54,49 +54,30 @@ export default class JcodePlugin extends Plugin {
 			id: "jcode-askjcode-submit",
 			name: "/askjcode: submit current line",
 			editorCallback: async (editor, view) => {
-				if (this.currentRequestActive) {
-					new Notice("jcode: a request is already in flight. Wait or cancel.");
+				const markdownView = view instanceof MarkdownView
+					? view
+					: this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!markdownView) {
+					new Notice("jcode: no active Markdown editor.");
 					return;
 				}
-				if (!this.transport) {
-					new Notice("jcode: transport not configured.");
-					return;
-				}
-				const file = view instanceof MarkdownView ? view.file : null;
-				const adapter = this.app.vault.adapter as unknown as { basePath?: string };
-				const vaultRoot = adapter.basePath ?? "";
-
-				const noteText = editor.getValue();
-
-				this.currentRequestActive = true;
-				try {
-					await runAskJcode(
-						{
-							editor,
-							noteText,
-							notePath: file?.path ?? null,
-							vaultRoot,
-						},
-						{
-							transport: this.transport,
-							statusBar: {
-								setText: (s) => this.statusBarItem?.setText(s),
-								clear: () => this.statusBarItem?.setText(""),
-							},
-							notify: (m) => new Notice(m),
-							resumeSessionId: this.settings.resumeSessionId || undefined,
-							provider: this.settings.provider || undefined,
-							saveSessionId: (id) => {
-								this.settings.resumeSessionId = id;
-								void this.saveData(this.settings);
-							},
-						}
-					);
-				} finally {
-					this.currentRequestActive = false;
-				}
+				await this.submitAskJcode(editor, markdownView);
 			},
 			hotkeys: [{ modifiers: ["Mod"], key: "Enter" }],
+		});
+
+		// Some Obsidian/Linux setups do not dispatch plugin command hotkeys for
+		// Ctrl+Enter while the CodeMirror editor owns focus. Keep the command above
+		// so users can rebind it, but also register a defensive DOM fallback.
+		this.registerDomEvent(document, "keydown", (evt: KeyboardEvent) => {
+			if (evt.key !== "Enter") return;
+			if (!(evt.ctrlKey || evt.metaKey)) return;
+			if (evt.shiftKey || evt.altKey) return;
+			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!view) return;
+			evt.preventDefault();
+			evt.stopPropagation();
+			void this.submitAskJcode(view.editor, view);
 		});
 
 		// Layer-2: cancel in-flight request.
@@ -259,6 +240,56 @@ export default class JcodePlugin extends Plugin {
 			},
 			{ mode: this.settings.autoTagMode, provider: this.settings.provider || undefined }
 		);
+	}
+
+	private async submitAskJcode(editor: Editor, view: MarkdownView) {
+		if (!findTrigger(editor)) {
+			new Notice('jcode: no "/askjcode ..." line at cursor. Type /askjcode then your question.');
+			return;
+		}
+		if (this.currentRequestActive) {
+			new Notice("jcode: a request is already in flight. Wait or cancel.");
+			return;
+		}
+		if (!this.transport) {
+			new Notice("jcode: transport not configured.");
+			return;
+		}
+
+		const file = view.file;
+		const adapter = this.app.vault.adapter as unknown as { basePath?: string };
+		const vaultRoot = adapter.basePath ?? "";
+		const noteText = editor.getValue();
+
+		this.currentRequestActive = true;
+		new Notice("jcode: started. Response will be inserted below the /askjcode line.");
+		try {
+			const inserted = await runAskJcode(
+				{
+					editor,
+					noteText,
+					notePath: file?.path ?? null,
+					vaultRoot,
+				},
+				{
+					transport: this.transport,
+					statusBar: {
+						setText: (s) => this.statusBarItem?.setText(s),
+						clear: () => this.statusBarItem?.setText(""),
+					},
+					notify: (m) => new Notice(m),
+					resumeSessionId: this.settings.resumeSessionId || undefined,
+					provider: this.settings.provider || undefined,
+					saveSessionId: (id) => {
+						this.settings.resumeSessionId = id;
+						void this.saveData(this.settings);
+					},
+				}
+			);
+			if (inserted) new Notice("jcode: done. Inserted response below the trigger line.");
+		} finally {
+			this.currentRequestActive = false;
+		}
 	}
 
 	private async suggestTagsFor(f: TFile, manual: boolean) {
