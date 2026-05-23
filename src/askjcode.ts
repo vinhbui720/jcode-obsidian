@@ -54,6 +54,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	}
 
 	const { line, prompt, flags } = trigger;
+	const title = findSectionTitle(ctx.editor, line) ?? "jcode answer";
 
 	if (flags.has("notebooklm")) {
 		notify("jcode: --notebooklm route lands in M5. Use plain /askjcode for now.");
@@ -66,40 +67,47 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	}
 
 	deps.statusBar.setText("jcode: connecting…");
+	const live = insertLiveStatus(ctx.editor, line, title, "connecting…");
 
 	let accumulated = "";
 	let sessionId = deps.resumeSessionId;
 	let errored = false;
 
 	const onEvent = (e: JcodeEvent) => {
-		switch (e.type) {
-			case "start":
+			switch (e.type) {
+				case "start":
 				if (e.sessionId) {
 					sessionId = e.sessionId;
 					deps.saveSessionId?.(e.sessionId);
 				}
-				deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
-				break;
-			case "status":
-				deps.statusBar.setText(`jcode: ${e.detail}`);
-				break;
-			case "delta":
-				accumulated += e.text;
-				deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
-				break;
-			case "tool":
-				deps.statusBar.setText(
-					`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
-				);
-				break;
-			case "end":
-				if (e.text) accumulated = e.text;
-				deps.statusBar.setText("jcode: done");
-				break;
-			case "error":
-				errored = true;
-				deps.statusBar.setText(`jcode: error`);
-				break;
+					deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
+					updateLiveStatus(ctx.editor, live, title, `${e.model || e.provider || "ready"} streaming…`);
+					break;
+				case "status":
+					deps.statusBar.setText(`jcode: ${e.detail}`);
+					updateLiveStatus(ctx.editor, live, title, e.detail);
+					break;
+				case "delta":
+					accumulated += e.text;
+					deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
+					updateLiveStatus(ctx.editor, live, title, `writing… ${accumulated.length} chars`);
+					break;
+				case "tool":
+					deps.statusBar.setText(
+						`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
+					);
+					updateLiveStatus(ctx.editor, live, title, `tool ${e.name} ${e.status === "start" ? "running" : "done"}`);
+					break;
+				case "end":
+					if (e.text) accumulated = e.text;
+					deps.statusBar.setText("jcode: done");
+					updateLiveStatus(ctx.editor, live, title, "done, inserting answer…");
+					break;
+				case "error":
+					errored = true;
+					deps.statusBar.setText(`jcode: error`);
+					updateLiveStatus(ctx.editor, live, title, "error");
+					break;
 		}
 	};
 
@@ -119,7 +127,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 			`jcode error: ${err instanceof Error ? err.message : String(err)}`;
 	}
 
-	insertCallout(ctx.editor, line, accumulated, errored);
+	replaceLiveStatusWithCallout(ctx.editor, live, title, accumulated, errored);
 
 	setTimeout(() => deps.statusBar.clear(), 4000);
 	return true;
@@ -204,5 +212,67 @@ export function insertCallout(
 	);
 }
 
+interface LiveBlock {
+	startLine: number;
+	lineCount: number;
+}
+
+function insertLiveStatus(
+	editor: Editor,
+	triggerLine: number,
+	title: string,
+	status: string
+): LiveBlock {
+	const insertAtLine = triggerLine + 1;
+	const block = renderStatusBlock(title, status);
+	editor.replaceRange(block, { line: insertAtLine, ch: 0 }, { line: insertAtLine, ch: 0 });
+	return { startLine: insertAtLine, lineCount: block.split("\n").length - 1 };
+}
+
+function updateLiveStatus(editor: Editor, live: LiveBlock, title: string, status: string) {
+	const block = renderStatusBlock(title, status);
+	replaceLiveBlock(editor, live, block);
+}
+
+function replaceLiveStatusWithCallout(
+	editor: Editor,
+	live: LiveBlock,
+	title: string,
+	text: string,
+	errored: boolean
+) {
+	const kind = errored ? "danger" : "jcode";
+	const label = errored ? `${title} error` : title;
+	const safe = text.trim() || (errored ? "(no output)" : "(empty response)");
+	const quoted = safe
+		.split("\n")
+		.map((l) => `> ${l}`)
+		.join("\n");
+	replaceLiveBlock(editor, live, `> [!${kind}]+ ${label}\n${quoted}\n`);
+}
+
+function replaceLiveBlock(editor: Editor, live: LiveBlock, replacement: string) {
+	editor.replaceRange(
+		replacement,
+		{ line: live.startLine, ch: 0 },
+		{ line: live.startLine + live.lineCount, ch: 0 }
+	);
+	live.lineCount = replacement.split("\n").length - 1;
+}
+
+function renderStatusBlock(title: string, status: string): string {
+	return `> [!jcode]+ ${title}\n> _jcode: ${status}_\n`;
+}
+
+function findSectionTitle(editor: Editor, triggerLine: number): string | null {
+	for (let i = triggerLine; i >= 0; i--) {
+		const line = editor.getLine(i);
+		const m = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+		if (m) return m[2].replace(/#+\s*$/, "").trim() || null;
+	}
+	return null;
+}
+
 // Exposed for tests.
 export const _parseLine = parseLine;
+export const _internals = { findSectionTitle, renderStatusBlock };

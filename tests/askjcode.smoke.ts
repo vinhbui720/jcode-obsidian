@@ -2,7 +2,7 @@
  * Tests for /askjcode line parsing, callout rendering, and event normalisation.
  * Run: npx tsx tests/askjcode.smoke.ts
  */
-import { _parseLine, insertCallout } from "../src/askjcode";
+import { _internals, _parseLine, insertCallout, runAskJcode } from "../src/askjcode";
 import { _normaliseEvent } from "../src/jcode-client";
 
 let failures = 0;
@@ -113,15 +113,21 @@ class FakeEditor {
 	getValue() {
 		return this.lines.join("\n");
 	}
+	somethingSelected() {
+		return false;
+	}
+	getSelection() {
+		return "";
+	}
 	replaceRange(
 		text: string,
 		from: { line: number; ch: number },
 		_to: { line: number; ch: number }
 	) {
+		const to = _to;
 		const inserted = text.split("\n");
-		// At-cursor insert; we ignore `to` since the tests only insert at line start.
 		const before = this.lines.slice(0, from.line);
-		const after = this.lines.slice(from.line);
+		const after = this.lines.slice(to.line);
 		this.lines = [...before, ...inserted.slice(0, -1), inserted[inserted.length - 1] + (after[0] ?? ""), ...after.slice(1)];
 	}
 }
@@ -143,10 +149,46 @@ function testInsertCallout() {
 	eq(e3.getValue().includes("(empty response)"), true, "callout: empty fallback");
 }
 
-(() => {
+async function testRunAskJcodeLiveBlock() {
+	const e = new FakeEditor("# Speaking practice\n/askjcode say hi\nnext");
+	e.cursor = { line: 1, ch: 16 };
+	const statuses: string[] = [];
+	const ok = await runAskJcode(
+		{ editor: e as never, noteText: e.getValue(), notePath: "n.md", vaultRoot: "/tmp" },
+		{
+			transport: {
+				cancel() {},
+				async ask(_opts, on) {
+					on({ type: "start", model: "mock" });
+					on({ type: "delta", text: "Hello" });
+					on({ type: "end", text: "Hello final" });
+					return { type: "end", text: "Hello final" };
+				},
+			},
+			statusBar: { setText: (s) => statuses.push(s), clear: () => statuses.push("clear") },
+		}
+	);
+	eq(ok, true, "runAsk: returns true");
+	const out = e.getValue();
+	eq(out.includes("> [!jcode]+ Speaking practice"), true, "runAsk: uses nearest heading as title");
+	eq(out.includes("> Hello final"), true, "runAsk: inserts final answer");
+	eq(out.includes("_jcode: writing"), false, "runAsk: final replaces live status");
+	eq(out.includes("next"), true, "runAsk: preserves following line");
+	eq(statuses.includes("jcode: connecting…"), true, "runAsk: status bar connecting");
+}
+
+function testSectionInternals() {
+	const e = new FakeEditor("# Top\ntext\n## Child ##\n/askjcode hi");
+	eq(_internals.findSectionTitle(e as never, 3), "Child", "section title strips trailing hashes");
+	eq(_internals.renderStatusBlock("Child", "connecting…"), "> [!jcode]+ Child\n> _jcode: connecting…_\n", "status block render");
+}
+
+(async () => {
 	testParseLine();
 	testNormaliseEvent();
 	testInsertCallout();
+	testSectionInternals();
+	await testRunAskJcodeLiveBlock();
 	if (failures > 0) {
 		console.error(`\n${failures} TEST(S) FAILED`);
 		process.exit(1);
