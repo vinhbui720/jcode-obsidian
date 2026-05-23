@@ -67,9 +67,11 @@ export default class JcodePlugin extends Plugin {
 		});
 
 		// Some Obsidian/Linux setups do not dispatch plugin command hotkeys for
-		// Ctrl+Enter while the CodeMirror editor owns focus. Keep the command above
-		// so users can rebind it, but also register a defensive DOM fallback.
-		this.registerDomEvent(document, "keydown", (evt: KeyboardEvent) => {
+		// Ctrl+Enter while the CodeMirror editor owns focus. CodeMirror may also
+		// stop propagation before Obsidian's command layer sees the event, so this
+		// fallback MUST listen in capture phase. `registerDomEvent` only listens in
+		// bubble phase, so we wire and unregister manually.
+		const askHotkeyHandler = (evt: KeyboardEvent) => {
 			if (evt.key !== "Enter") return;
 			if (!(evt.ctrlKey || evt.metaKey)) return;
 			if (evt.shiftKey || evt.altKey) return;
@@ -78,7 +80,9 @@ export default class JcodePlugin extends Plugin {
 			evt.preventDefault();
 			evt.stopPropagation();
 			void this.submitAskJcode(view.editor, view);
-		});
+		};
+		document.addEventListener("keydown", askHotkeyHandler, true);
+		this.register(() => document.removeEventListener("keydown", askHotkeyHandler, true));
 
 		// Layer-2: cancel in-flight request.
 		this.addCommand({
@@ -120,10 +124,9 @@ export default class JcodePlugin extends Plugin {
 			})
 		);
 
-		// Initial aggregation a few seconds after load (let metadataCache warm up).
-		if (this.settings.todoEnabled) {
-			window.setTimeout(() => void this.runTodoAggregator(false), 3000);
-		}
+		// Do not scan the whole vault on plugin load. TODO aggregation is manual
+		// or save-triggered only, because large vaults should not be touched just
+		// because the plugin loaded.
 
 		// B5: spaced-repetition daily picker.
 		this.addCommand({
@@ -140,9 +143,8 @@ export default class JcodePlugin extends Plugin {
 				await this.markSpacedRepReviewed(file);
 			},
 		});
-		if (this.settings.spacedRepEnabled) {
-			window.setTimeout(() => void this.runSpacedRepOncePerDay(), 4000);
-		}
+		// Do not scan the whole vault on plugin load. Spaced-rep runs only through
+		// the manual command or after marking a note as reviewed.
 
 		// B2 auto-tag: command palette entries.
 		this.addCommand({

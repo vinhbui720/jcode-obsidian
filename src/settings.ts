@@ -70,7 +70,7 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	todoEnabled: true,
 	todoOutputPath: "todo.md",
 	todoIgnoreGlobs: "templates/**\n.trash/**\ntodo.md",
-	todoRunOnSave: true,
+	todoRunOnSave: false,
 	autoTagEnabled: true,
 	autoTagMode: "suggest",
 	autoTagOnCreate: true,
