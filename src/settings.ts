@@ -40,6 +40,11 @@ export interface JcodeSettings {
 	todoOutputPath: string;
 	todoIgnoreGlobs: string;
 	todoRunOnSave: boolean;
+
+	/** B2 — Auto-tag from title. */
+	autoTagEnabled: boolean;
+	autoTagMode: "suggest" | "auto";
+	autoTagOnCreate: boolean;
 }
 
 export const DEFAULT_SETTINGS: JcodeSettings = {
@@ -58,6 +63,9 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	todoOutputPath: "todo.md",
 	todoIgnoreGlobs: "templates/**\n.trash/**\ntodo.md",
 	todoRunOnSave: true,
+	autoTagEnabled: true,
+	autoTagMode: "suggest",
+	autoTagOnCreate: true,
 };
 
 export class JcodeSettingTab extends PluginSettingTab {
@@ -272,6 +280,44 @@ export class JcodeSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.todoRunOnSave).onChange(async (v) => {
 					this.plugin.settings.todoRunOnSave = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		containerEl.createEl("h3", { text: "B2 — Auto-tag from title (low AI cost)" });
+		containerEl.createEl("p", {
+			text: "When a new note is created, jcode picks 1-3 tags using only the title and the vault's existing tag pool. The note body is NOT sent. Suggest mode notifies you; auto mode writes tags into frontmatter immediately.",
+		});
+
+		new Setting(containerEl)
+			.setName("Enable auto-tag")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.autoTagEnabled).onChange(async (v) => {
+					this.plugin.settings.autoTagEnabled = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Mode")
+			.setDesc("'suggest' = preview only. 'auto' = apply tags into frontmatter immediately.")
+			.addDropdown((d) =>
+				d
+					.addOption("suggest", "suggest (safe)")
+					.addOption("auto", "auto (writes frontmatter)")
+					.setValue(this.plugin.settings.autoTagMode)
+					.onChange(async (v) => {
+						this.plugin.settings.autoTagMode = v as "suggest" | "auto";
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Trigger on file create")
+			.setDesc("Run automatically whenever a new .md file appears in the vault.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.autoTagOnCreate).onChange(async (v) => {
+					this.plugin.settings.autoTagOnCreate = v;
 					await this.plugin.saveSettings();
 				})
 			);

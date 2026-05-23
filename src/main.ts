@@ -4,14 +4,17 @@ import { DEFAULT_SETTINGS, JcodeSettings, JcodeSettingTab } from "./settings";
 import { createTransport, JcodeTransport } from "./jcode-client";
 import { runAskJcode } from "./askjcode";
 import { TodoAggregator } from "./todo-aggregator";
+import { AutoTagger, TagSuggestion } from "./auto-tagger";
 
 export default class JcodePlugin extends Plugin {
 	settings: JcodeSettings = DEFAULT_SETTINGS;
 	private broadcaster: ContextBroadcaster | null = null;
 	private transport: JcodeTransport | null = null;
+	private autoTagger: AutoTagger | null = null;
 	private statusBarItem: HTMLElement | null = null;
 	private currentRequestActive = false;
 	private todoTimer: number | null = null;
+	private lastSuggestion: TagSuggestion | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -24,6 +27,7 @@ export default class JcodePlugin extends Plugin {
 
 		this.applyContextBroadcastSetting();
 		this.rebuildTransport();
+		this.rebuildAutoTagger();
 
 		this.statusBarItem = this.addStatusBarItem();
 		this.statusBarItem.setText("");
@@ -137,6 +141,54 @@ export default class JcodePlugin extends Plugin {
 			window.setTimeout(() => void this.runTodoAggregator(false), 3000);
 		}
 
+		// B2 auto-tag: command palette entries.
+		this.addCommand({
+			id: "jcode-autotag-current",
+			name: "Auto-tag: suggest tags for current note",
+			editorCallback: async (_e, view) => {
+				const file = view instanceof MarkdownView ? view.file : null;
+				if (!file) return;
+				await this.suggestTagsFor(file, true);
+			},
+		});
+
+		this.addCommand({
+			id: "jcode-autotag-apply-last",
+			name: "Auto-tag: apply last suggestion",
+			callback: async () => {
+				if (!this.lastSuggestion || !this.autoTagger) {
+					new Notice("jcode auto-tag: no pending suggestion.");
+					return;
+				}
+				try {
+					await this.autoTagger.apply(this.lastSuggestion);
+					new Notice(
+						`jcode auto-tag: applied [${this.lastSuggestion.tags.join(", ")}]`
+					);
+					this.lastSuggestion = null;
+				} catch (err) {
+					new Notice(
+						`jcode auto-tag: apply failed - ${err instanceof Error ? err.message : String(err)}`
+					);
+				}
+			},
+		});
+
+		// B2 auto-tag: trigger on new file.
+		this.registerEvent(
+			this.app.vault.on("create", (f) => {
+				if (!this.settings.autoTagEnabled) return;
+				if (!this.settings.autoTagOnCreate) return;
+				if (!(f instanceof TFile) || f.extension !== "md") return;
+				// Wait a moment so the user has time to give the file a real title
+				// and so metadataCache has indexed it.
+				window.setTimeout(() => {
+					if (!(f instanceof TFile)) return;
+					void this.suggestTagsFor(f, false);
+				}, 8000);
+			})
+		);
+
 		console.log("[jcode-obsidian] loaded. context file:", this.broadcaster.getFilePath());
 	}
 
@@ -169,6 +221,33 @@ export default class JcodePlugin extends Plugin {
 			host: this.settings.pairingHost,
 			token: this.settings.pairingToken,
 		});
+		this.rebuildAutoTagger();
+	}
+
+	rebuildAutoTagger() {
+		if (!this.transport) {
+			this.autoTagger = null;
+			return;
+		}
+		this.autoTagger = new AutoTagger(
+			{
+				app: this.app,
+				transport: this.transport,
+				notify: (m) => new Notice(m),
+			},
+			{ mode: this.settings.autoTagMode, provider: this.settings.provider || undefined }
+		);
+	}
+
+	private async suggestTagsFor(f: TFile, manual: boolean) {
+		if (!this.autoTagger) return;
+		if (!this.settings.autoTagEnabled) {
+			if (manual) new Notice("jcode auto-tag is disabled in settings.");
+			return;
+		}
+		this.autoTagger.setOptions({ mode: this.settings.autoTagMode });
+		const s = await this.autoTagger.handleNewFile(f);
+		if (s) this.lastSuggestion = s;
 	}
 
 	applyContextBroadcastSetting() {
