@@ -6,6 +6,7 @@ import { runAskJcode } from "./askjcode";
 import { TodoAggregator } from "./todo-aggregator";
 import { AutoTagger, TagSuggestion } from "./auto-tagger";
 import { SpacedRepPicker } from "./spaced-rep";
+import { AskJcodeSuggest } from "./askjcode-suggest";
 
 export default class JcodePlugin extends Plugin {
 	settings: JcodeSettings = DEFAULT_SETTINGS;
@@ -34,6 +35,7 @@ export default class JcodePlugin extends Plugin {
 		this.statusBarItem.setText("");
 
 		this.addSettingTab(new JcodeSettingTab(this.app, this));
+		this.registerEditorSuggest(new AskJcodeSuggest(this.app));
 
 		// Layer-1: manual broadcast trigger.
 		this.addCommand({
