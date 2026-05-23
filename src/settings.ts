@@ -34,6 +34,12 @@ export interface JcodeSettings {
 
 	/** Status bar verbosity for /askjcode streaming. */
 	statusBarStreaming: boolean;
+
+	/** B3 — TODO aggregator. */
+	todoEnabled: boolean;
+	todoOutputPath: string;
+	todoIgnoreGlobs: string;
+	todoRunOnSave: boolean;
 }
 
 export const DEFAULT_SETTINGS: JcodeSettings = {
@@ -48,6 +54,10 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	resumeSessionId: "",
 	askjcodeHotkeyHint: "Ctrl+Enter (on a /askjcode line)",
 	statusBarStreaming: true,
+	todoEnabled: true,
+	todoOutputPath: "todo.md",
+	todoIgnoreGlobs: "templates/**\n.trash/**\ntodo.md",
+	todoRunOnSave: true,
 };
 
 export class JcodeSettingTab extends PluginSettingTab {
@@ -212,6 +222,56 @@ export class JcodeSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(this.plugin.settings.statusBarStreaming).onChange(async (v) => {
 					this.plugin.settings.statusBarStreaming = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		containerEl.createEl("h3", { text: "Layer 3 — TODO aggregator (no AI)" });
+		containerEl.createEl("p", {
+			text: "Scans the vault for unchecked `- [ ]` items and notes tagged #notdone, then writes a consolidated TODO note. Runs on save (debounced) and via command palette. Zero LLM cost.",
+		});
+
+		new Setting(containerEl)
+			.setName("Enable TODO aggregator")
+			.setDesc("Turn the whole feature on or off.")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.todoEnabled).onChange(async (v) => {
+					this.plugin.settings.todoEnabled = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Output note path")
+			.setDesc("Where to write the generated TODO. Vault-relative.")
+			.addText((t) =>
+				t
+					.setPlaceholder("todo.md")
+					.setValue(this.plugin.settings.todoOutputPath)
+					.onChange(async (v) => {
+						this.plugin.settings.todoOutputPath = v.trim() || "todo.md";
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Ignore globs")
+			.setDesc("One glob per line. Matching files are skipped (e.g. templates/**).")
+			.addTextArea((t) =>
+				t
+					.setValue(this.plugin.settings.todoIgnoreGlobs)
+					.onChange(async (v) => {
+						this.plugin.settings.todoIgnoreGlobs = v;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Run on save")
+			.setDesc("Re-aggregate whenever a note is modified (debounced 2s).")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.todoRunOnSave).onChange(async (v) => {
+					this.plugin.settings.todoRunOnSave = v;
 					await this.plugin.saveSettings();
 				})
 			);

@@ -1,8 +1,9 @@
-import { Plugin, Notice, MarkdownView } from "obsidian";
+import { Plugin, Notice, MarkdownView, TFile } from "obsidian";
 import { ContextBroadcaster, ViewWithEditor } from "./context-broadcaster";
 import { DEFAULT_SETTINGS, JcodeSettings, JcodeSettingTab } from "./settings";
 import { createTransport, JcodeTransport } from "./jcode-client";
 import { runAskJcode } from "./askjcode";
+import { TodoAggregator } from "./todo-aggregator";
 
 export default class JcodePlugin extends Plugin {
 	settings: JcodeSettings = DEFAULT_SETTINGS;
@@ -10,6 +11,7 @@ export default class JcodePlugin extends Plugin {
 	private transport: JcodeTransport | null = null;
 	private statusBarItem: HTMLElement | null = null;
 	private currentRequestActive = false;
+	private todoTimer: number | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -112,6 +114,29 @@ export default class JcodePlugin extends Plugin {
 			},
 		});
 
+		// Layer-3: TODO aggregator manual run.
+		this.addCommand({
+			id: "jcode-todo-rebuild",
+			name: "TODO aggregator: rebuild now",
+			callback: () => void this.runTodoAggregator(true),
+		});
+
+		// Layer-3: TODO aggregator on save (debounced).
+		this.registerEvent(
+			this.app.vault.on("modify", (f) => {
+				if (!this.settings.todoEnabled) return;
+				if (!this.settings.todoRunOnSave) return;
+				if (!(f instanceof TFile) || f.extension !== "md") return;
+				if (f.path === this.settings.todoOutputPath) return; // avoid loop
+				this.scheduleTodoRebuild();
+			})
+		);
+
+		// Initial aggregation a few seconds after load (let metadataCache warm up).
+		if (this.settings.todoEnabled) {
+			window.setTimeout(() => void this.runTodoAggregator(false), 3000);
+		}
+
 		console.log("[jcode-obsidian] loaded. context file:", this.broadcaster.getFilePath());
 	}
 
@@ -175,5 +200,35 @@ export default class JcodePlugin extends Plugin {
 				getSelection: () => view.editor.getSelection(),
 			},
 		};
+	}
+
+	private scheduleTodoRebuild() {
+		if (this.todoTimer !== null) window.clearTimeout(this.todoTimer);
+		this.todoTimer = window.setTimeout(() => {
+			this.todoTimer = null;
+			void this.runTodoAggregator(false);
+		}, 2000);
+	}
+
+	private async runTodoAggregator(announce: boolean) {
+		if (!this.settings.todoEnabled) return;
+		try {
+			const agg = new TodoAggregator(this.app, {
+				outputPath: this.settings.todoOutputPath,
+				ignore: this.settings.todoIgnoreGlobs
+					.split("\n")
+					.map((s) => s.trim())
+					.filter(Boolean),
+			});
+			const res = await agg.run();
+			if (announce) {
+				new Notice(
+					`jcode: TODO updated → ${res.outputPath} (${res.tasks.length} tasks, ${res.notes.length} notes)`
+				);
+			}
+		} catch (err) {
+			console.error("[jcode-obsidian] todo aggregator failed:", err);
+			if (announce) new Notice("jcode: TODO aggregator failed (see console)");
+		}
 	}
 }
