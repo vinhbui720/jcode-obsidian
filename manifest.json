@@ -1,0 +1,10 @@
+{
+  "id": "jcode-obsidian",
+  "name": "jcode",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Join the jcode swarm from Obsidian. Broadcast current-note context, ask AI inline with /askjcode, and automate vault tasks.",
+  "author": "Vinh Bui",
+  "authorUrl": "https://github.com/vinhbui720",
+  "isDesktopOnly": true
+}

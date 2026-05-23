@@ -1,0 +1,35 @@
+{
+  "name": "jcode-obsidian",
+  "version": "0.1.0",
+  "description": "Obsidian plugin that joins the jcode swarm as a peer client. Adds AI features, current-note context broadcast, and inline /askjcode to your vault.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "install-local": "bash scripts/install-local.sh",
+    "test": "tsx tests/context-broadcaster.smoke.ts",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "keywords": [
+    "obsidian-plugin",
+    "jcode",
+    "ai"
+  ],
+  "author": "Vinh Bui",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "@types/ws": "^8.5.13",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.7.2",
+    "prettier": "^3.3.3",
+    "tslib": "^2.7.0",
+    "tsx": "^4.22.3",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
