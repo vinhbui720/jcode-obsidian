@@ -46,9 +46,11 @@ export interface AskOptions {
 export interface JcodeTransport {
 	ask(opts: AskOptions, onEvent: (e: JcodeEvent) => void): Promise<JcodeEvent>;
 	cancel(): void;
+	start?(opts: { cwd?: string; provider?: string; resumeSessionId?: string }, onEvent?: (e: JcodeEvent) => void): void;
+	setSessionId?(sessionId: string): void;
 }
 
-export type TransportKind = "stdio" | "websocket";
+export type TransportKind = "stdio" | "repl" | "websocket";
 
 export interface ClientConfig {
 	kind: TransportKind;
@@ -60,6 +62,7 @@ export interface ClientConfig {
 
 export function createTransport(cfg: ClientConfig): JcodeTransport {
 	if (cfg.kind === "stdio") return new StdioTransport(cfg.jcodeBinary);
+	if (cfg.kind === "repl") return new ReplTransport(cfg.jcodeBinary);
 	if (cfg.kind === "websocket") return new WebSocketTransport(cfg.host ?? "", cfg.token ?? "");
 	throw new Error(`unknown transport: ${cfg.kind as string}`);
 }
@@ -156,6 +159,140 @@ class StdioTransport implements JcodeTransport {
 		});
 
 		return settle;
+	}
+}
+
+class ReplTransport implements JcodeTransport {
+	private child: ChildProcess | null = null;
+	private sessionId = "";
+	private cwd = "";
+	private provider = "";
+	private pending: {
+		resolve: (e: JcodeEvent) => void;
+		reject: (e: Error) => void;
+		onEvent: (e: JcodeEvent) => void;
+		text: string;
+		timer: NodeJS.Timeout | null;
+	} | null = null;
+	constructor(private bin: string) {}
+
+	setSessionId(sessionId: string) {
+		this.sessionId = sessionId.trim();
+	}
+
+	start(opts: { cwd?: string; provider?: string; resumeSessionId?: string }, onEvent?: (e: JcodeEvent) => void) {
+		this.cwd = opts.cwd ?? this.cwd;
+		this.provider = opts.provider ?? this.provider;
+		if (opts.resumeSessionId) this.sessionId = opts.resumeSessionId;
+		if (this.sessionId) this.ensureRepl(onEvent);
+	}
+
+	cancel() {
+		if (this.pending) {
+			const e: JcodeEvent = { type: "error", message: "cancelled" };
+			this.pending.onEvent(e);
+			this.pending.reject(new Error("cancelled"));
+			this.pending = null;
+		}
+	}
+
+	async ask(opts: AskOptions, onEvent: (e: JcodeEvent) => void): Promise<JcodeEvent> {
+		this.cwd = opts.cwd ?? this.cwd;
+		this.provider = opts.provider ?? this.provider;
+		if (opts.resumeSessionId) this.sessionId = opts.resumeSessionId;
+		if (!this.sessionId) {
+			// First prompt must create a real jcode session. After it completes, keep a
+			// REPL alive for subsequent prompts, matching jcode-panel's architecture.
+			const first = await new StdioTransport(this.bin).ask(opts, (e) => {
+				if (e.type === "start" && e.sessionId) this.sessionId = e.sessionId;
+				onEvent(e);
+			});
+			if (this.sessionId) this.ensureRepl(onEvent);
+			return first;
+		}
+
+		this.ensureRepl(onEvent);
+		if (!this.child?.stdin || this.child.killed) throw new Error("persistent jcode repl is not writable");
+		if (this.pending) throw new Error("persistent jcode repl already has an in-flight prompt");
+
+		onEvent({ type: "status", detail: "sending prompt to persistent jcode client" });
+		const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
+		const promise = new Promise<JcodeEvent>((resolve, reject) => {
+			const timer = timeoutMs > 0 ? setTimeout(() => {
+				const e: JcodeEvent = { type: "error", message: `jcode repl timed out after ${timeoutMs}ms` };
+				onEvent(e);
+				this.pending = null;
+				reject(new Error(e.message));
+			}, timeoutMs) : null;
+			this.pending = { resolve, reject, onEvent, text: "", timer };
+		});
+		this.child.stdin.write(replWirePrompt(opts.message) + "\n");
+		return promise;
+	}
+
+	private ensureRepl(onEvent?: (e: JcodeEvent) => void) {
+		if (this.child && this.child.exitCode === null && !this.child.killed) return;
+		const args = ["repl", "--no-update", "--quiet"];
+		if (this.provider) args.unshift("-p", this.provider);
+		if (this.cwd) args.unshift("-C", this.cwd);
+		if (this.sessionId) args.push("--resume", this.sessionId);
+		this.child = spawn(this.bin, args, {
+			stdio: ["pipe", "pipe", "pipe"],
+			env: { ...process.env, JCODE_NON_INTERACTIVE: "1" },
+		});
+		this.child.stdout!.on("data", (b: Buffer) => this.handleOutput(b.toString(), onEvent));
+		this.child.stderr!.on("data", (b: Buffer) => this.handleOutput(b.toString(), onEvent));
+		this.child.on("close", (code) => {
+			const e: JcodeEvent = { type: "status", detail: `persistent jcode client stopped (${code ?? "?"})` };
+			onEvent?.(e);
+			if (this.pending) {
+				this.pending.reject(new Error(e.detail));
+				this.pending = null;
+			}
+		});
+		onEvent?.({ type: "status", detail: `persistent jcode client running${this.sessionId ? `: ${this.sessionId}` : ""}` });
+	}
+
+	private handleOutput(chunk: string, fallbackOnEvent?: (e: JcodeEvent) => void) {
+		for (const rawLine of chunk.split(/\r?\n/)) {
+			const line = rawLine.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").trim();
+			if (!line || line === ">" || line.startsWith("J-Code -") || line.startsWith("Type your message") || line.startsWith("Available skills:")) continue;
+			const pending = this.pending;
+			const onEvent = pending?.onEvent ?? fallbackOnEvent;
+			if (!onEvent) continue;
+			if (line.startsWith("[Tokens]")) {
+				const e: JcodeEvent = { type: "end", text: pending?.text.trim() ?? "" };
+				onEvent(e);
+				if (pending) {
+					if (pending.timer) clearTimeout(pending.timer);
+					pending.resolve(e);
+					this.pending = null;
+				}
+				continue;
+			}
+			const norm = tryNormaliseJsonLine(line);
+			if (norm) {
+				onEvent(norm);
+				continue;
+			}
+			const e: JcodeEvent = { type: "delta", text: line + "\n" };
+			if (pending) pending.text += e.text;
+			onEvent(e);
+		}
+	}
+}
+
+function replWirePrompt(prompt: string): string {
+	prompt = prompt.replace(/\r/g, "").trim();
+	if (!prompt.includes("\n")) return prompt;
+	return "Please interpret escaped \\n sequences as line breaks in this prompt: " + JSON.stringify(prompt);
+}
+
+function tryNormaliseJsonLine(line: string): JcodeEvent | null {
+	try {
+		return normaliseEvent(JSON.parse(line) as Record<string, unknown>);
+	} catch {
+		return null;
 	}
 }
 

@@ -233,7 +233,27 @@ export default class JcodePlugin extends Plugin {
 			host: this.settings.pairingHost,
 			token: this.settings.pairingToken,
 		});
+		this.warmPersistentClient();
 		this.rebuildAutoTagger();
+	}
+
+	private warmPersistentClient() {
+		if (!this.transport?.start || this.settings.transport !== "repl") return;
+		const adapter = this.app.vault.adapter as unknown as { basePath?: string };
+		this.transport.start(
+			{
+				cwd: adapter.basePath ?? undefined,
+				provider: this.settings.provider || undefined,
+				resumeSessionId: this.settings.resumeSessionId || undefined,
+			},
+			(e) => {
+				if (e.type === "status") this.statusBarItem?.setText(`jcode: ${e.detail}`);
+				if (e.type === "start" && e.sessionId) {
+					this.settings.resumeSessionId = e.sessionId;
+					void this.saveData(this.settings);
+				}
+			}
+		);
 	}
 
 	rebuildAutoTagger() {
@@ -296,6 +316,7 @@ export default class JcodePlugin extends Plugin {
 					provider: this.settings.provider || undefined,
 					saveSessionId: (id) => {
 						this.settings.resumeSessionId = id;
+						this.transport?.setSessionId?.(id);
 						void this.saveData(this.settings);
 					},
 				}

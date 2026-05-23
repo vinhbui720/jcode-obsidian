@@ -12,7 +12,7 @@ export interface JcodeSettings {
 	maxSelectionChars: number;
 
 	/** Layer 2: which transport /askjcode uses. */
-	transport: "stdio" | "websocket";
+	transport: "stdio" | "repl" | "websocket";
 
 	/** Path to the jcode CLI binary (used by stdio transport). */
 	jcodeBinary: string;
@@ -59,7 +59,7 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	contextBroadcastEnabled: true,
 	contextFilePath: "",
 	maxSelectionChars: 12000,
-	transport: "stdio",
+	transport: "repl",
 	jcodeBinary: "jcode",
 	pairingHost: "",
 	pairingToken: "",
@@ -147,15 +147,16 @@ export class JcodeSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Transport")
 			.setDesc(
-				"How /askjcode talks to jcode. 'stdio' spawns the jcode CLI (zero setup). 'websocket' connects to the jcode gateway (requires JCODE_GATEWAY_ENABLED=1 and pairing)."
+				"How /askjcode talks to jcode. 'repl' keeps one persistent jcode client alive while Obsidian is open. 'stdio' spawns per request. 'websocket' is future gateway pairing."
 			)
 			.addDropdown((dd) =>
 				dd
+					.addOption("repl", "persistent REPL (recommended)")
 					.addOption("stdio", "stdio (spawn jcode CLI)")
 					.addOption("websocket", "websocket (gateway pair)")
 					.setValue(this.plugin.settings.transport)
 					.onChange(async (v) => {
-						this.plugin.settings.transport = v as "stdio" | "websocket";
+						this.plugin.settings.transport = v as "stdio" | "repl" | "websocket";
 						await this.plugin.saveSettings();
 						this.plugin.rebuildTransport();
 					})
