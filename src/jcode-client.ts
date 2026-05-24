@@ -331,7 +331,9 @@ function normaliseReplTextLine(line: string, previous: string): string {
 
 function isReplNoiseLine(line: string): boolean {
 	const s = line.replace(/\s+/g, " ").trim().toLowerCase();
-	return /^→?\s*#\s*Skill:/i.test(line) ||
+	return /^→?\s*#{1,6}\s*Skill:/i.test(line) ||
+		/^→?\s*---\s*\[\d+\]/.test(line) ||
+		s.startsWith("reload complete") ||
 		s === "reload complete — continuing because a recovery directive was pending." ||
 		s === "reload complete - continuing because a recovery directive was pending." ||
 		s === "a recovery directive was pending.";

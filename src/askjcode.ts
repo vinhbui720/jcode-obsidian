@@ -98,7 +98,10 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 				break;
 			case "status":
 				if (statusBarStreaming) deps.statusBar.setText(`jcode: ${e.detail}`);
-				if (shouldPersistStatusAsProse(e.detail)) pushProseLine(runState, e.detail);
+				if (shouldPersistStatusAsProse(e.detail)) {
+					pushProseLine(runState, e.detail);
+					flushCurrentProse(runState, "feedback");
+				}
 				if (shouldShowLiveStatus(e.detail)) {
 					liveState.introLine = cleanFeedbackLine(e.detail);
 					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
@@ -112,13 +115,13 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 				updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 				break;
 			case "tool":
+				flushCurrentProse(runState, "feedback");
 				if (statusBarStreaming) {
 					deps.statusBar.setText(
 						`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
 					);
 				}
 				if (e.status === "start") {
-					flushCurrentProse(runState);
 					activeEntryId = upsertTimelineEntry(liveState, activeEntryId, formatToolLine(e), "running", Date.now());
 					if (!monitorTimer) monitorTimer = setInterval(monitor, 1500);
 				} else {
@@ -274,6 +277,7 @@ interface LiveTimelineEntry {
 
 interface RunState {
 	proseSegments: string[];
+	feedbackSegments: string[];
 	currentProseLines: string[];
 }
 
@@ -354,7 +358,7 @@ function createLiveState(toolLine: string): LiveState {
 }
 
 function createRunState(): RunState {
-	return { proseSegments: [], currentProseLines: [] };
+	return { proseSegments: [], feedbackSegments: [], currentProseLines: [] };
 }
 
 function upsertTimelineEntry(
@@ -421,6 +425,7 @@ function formatToolLine(e: Extract<JcodeEvent, { type: "tool" }>): string {
 function shouldShowLiveStatus(detail: string): boolean {
 	const s = detail.trim().toLowerCase();
 	if (!s) return false;
+	if (s.startsWith("reload complete") || s === "a recovery directive was pending.") return false;
 	if (s.includes("opening websocket")) return false;
 	if (s.includes("persistent jcode client running")) return false;
 	if (s.includes("sending prompt to persistent jcode client")) return false;
@@ -511,7 +516,9 @@ function splitFinalAssistantText(raw: string): { feedbacks: string[]; answer: st
 }
 
 function isToolTreeLine(trimmed: string): boolean {
-	if (/^→?\s*#\s*Skill:/i.test(trimmed)) return true;
+	if (/^→?\s*#{1,6}\s*Skill:/i.test(trimmed)) return true;
+	if (/^→?\s*---\s*\[\d+\]/.test(trimmed)) return true;
+	if (/^ERROR:\s+unknown account alias/i.test(trimmed)) return true;
 	if (/^[┌└│├─]/.test(trimmed)) return true;
 	if (/^[✓✗]\s+/.test(trimmed)) return true;
 	if (/^[│└├].*[✓✗]/.test(trimmed)) return true;
@@ -522,7 +529,7 @@ function isToolTreeLine(trimmed: string): boolean {
 }
 
 function isMetricsLine(trimmed: string): boolean {
-	return /^\d+(?:\.\d+)?s\s+·\s+/.test(trimmed);
+	return /^\d+(?:\.\d+)?s\s+·\s+/.test(trimmed) || /^reload complete/i.test(trimmed) || /^a recovery directive was pending\.?$/i.test(trimmed);
 }
 
 function cleanFeedbackLine(s: string): string {
@@ -549,18 +556,24 @@ function pushProseLine(state: RunState, line: string) {
 	state.currentProseLines.push(trimmed);
 }
 
-function flushCurrentProse(state: RunState) {
+function flushCurrentProse(state: RunState, bucket: "prose" | "feedback" = "prose") {
 	const text = normalizeProseBlock(state.currentProseLines);
-	if (text) state.proseSegments.push(text);
+	if (text) {
+		if (bucket === "feedback") state.feedbackSegments.push(text);
+		else state.proseSegments.push(text);
+	}
 	state.currentProseLines = [];
 }
 
 function buildStructuredResult(state: RunState): { feedbacks: string[]; answer: string } {
 	flushCurrentProse(state);
-	if (state.proseSegments.length === 0) return { feedbacks: [], answer: "" };
-	if (state.proseSegments.length === 1) return { feedbacks: [], answer: state.proseSegments[0] };
+	if (state.proseSegments.length === 0) {
+		const answer = state.feedbackSegments.pop() ?? "";
+		return { feedbacks: state.feedbackSegments, answer };
+	}
+	if (state.proseSegments.length === 1) return { feedbacks: state.feedbackSegments, answer: state.proseSegments[0] };
 	return {
-		feedbacks: state.proseSegments.slice(0, -1),
+		feedbacks: [...state.feedbackSegments, ...state.proseSegments.slice(0, -1)],
 		answer: state.proseSegments[state.proseSegments.length - 1] ?? "",
 	};
 }
@@ -584,6 +597,7 @@ function cleanFeedbackSummary(s: string): string {
 
 function shouldPersistStatusAsProse(detail: string): boolean {
 	const s = cleanFeedbackLine(detail);
+	if (isMetricsLine(s) || isToolTreeLine(s)) return false;
 	if (!shouldShowLiveStatus(s)) return false;
 	if (/^thinking(…|\.\.\.)?$/i.test(s)) return false;
 	if (/^connected/i.test(s)) return false;
@@ -609,7 +623,7 @@ function normalizeProseBlock(lines: string[]): string {
 			if (pieces.length > 0 && pieces[pieces.length - 1] !== "") pieces.push("");
 			continue;
 		}
-		if (/^[•*-]\s+/.test(line)) {
+		if (/^(?:[•*-]|\d+[.)])\s+/.test(line)) {
 			flushParagraph();
 			pieces.push(line);
 			continue;

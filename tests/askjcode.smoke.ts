@@ -258,7 +258,7 @@ async function testRunAskJcodeBuildsAnswerFromStatusWhenFinalTextEmpty() {
 	const out = e.getValue();
 	eq(out.includes("> - Mình sẽ kiểm tra Calendar tuần sau cho account personal."), true, "runAsk status fallback keeps first feedback");
 	eq(out.includes("week.sh trả “next 7 days”"), true, "runAsk status fallback keeps second feedback");
-	eq(out.includes("Reload complete — continuing because a recovery directive was pending."), true, "runAsk status fallback uses last prose as answer");
+	eq(out.includes("a recovery directive was pending."), false, "runAsk status fallback drops recovery noise");
 	eq(out.includes("(empty response)"), false, "runAsk status fallback avoids empty response");
 }
 
@@ -388,8 +388,8 @@ a recovery directive was pending.
 
 19s · 72.1 tps · ↑24k ↓20`;
 	const parsedStudyMail = _internals.splitFinalAssistantText(studyMailRaw);
-	eq(parsedStudyMail.feedbacks, ["Đang check mail tài khoản study cho tuần sau. Đã thấy email quan trọng. Mình check thêm keyword ngày tuần sau để không sót deadline/sự kiện."], "split final study mail keeps feedback before tools");
-	eq(parsedStudyMail.answer, "Reload complete — continuing because a recovery directive was pending.", "split final study mail keeps recovery answer");
+	eq(parsedStudyMail.feedbacks, [], "split final study mail has no separate final feedback when no answer follows tools");
+	eq(parsedStudyMail.answer, "Đang check mail tài khoản study cho tuần sau. Đã thấy email quan trọng. Mình check thêm keyword ngày tuần sau để không sót deadline/sự kiện.", "split final study mail keeps useful prose as fallback answer");
 }
 
 (async () => {

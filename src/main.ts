@@ -263,6 +263,7 @@ export default class JcodePlugin extends Plugin {
 	private warmPersistentClient() {
 		if (!this.transport?.start || this.settings.transport !== "repl") return;
 		const adapter = this.app.vault.adapter as unknown as { basePath?: string };
+		void this.reconcileResumeSessionForVault(adapter.basePath ?? "");
 		this.transport.start(
 			{
 				cwd: adapter.basePath ?? undefined,
@@ -410,7 +411,8 @@ export default class JcodePlugin extends Plugin {
 		if (now - this.lastAskSubmitAt < 1000) return;
 		this.lastAskSubmitAt = now;
 
-		if (!findTrigger(editor)) {
+		const trigger = findTrigger(editor);
+		if (!trigger) {
 			if (await this.maybeAutoTagEmptyNote(editor, view)) return;
 			new Notice('jcode: no "/askjcode ..." line at cursor. Type /askjcode then your question.');
 			return;
@@ -461,9 +463,94 @@ export default class JcodePlugin extends Plugin {
 					saveSessionId: (id) => void this.recordActiveSession(id, activeLabel),
 				}
 			);
+			if (inserted) await this.syncActiveSessionFromPrompt(trigger.prompt, vaultRoot);
 			if (inserted) new Notice("jcode: done. Inserted response below the trigger line.");
 		} finally {
 			this.currentRequestActive = false;
+		}
+	}
+
+	private async reconcileResumeSessionForVault(vaultRoot: string) {
+		if (!vaultRoot) return;
+		const current = this.readSessionMeta(this.settings.resumeSessionId || "");
+		if (current?.status === "Active") return;
+		const latest = this.findLatestSession({ cwd: vaultRoot, status: "Active" });
+		if (!latest || latest.id === this.settings.resumeSessionId) return;
+		await this.recordActiveSession(latest.id, latest.label);
+	}
+
+	private async syncActiveSessionFromPrompt(prompt: string, vaultRoot: string) {
+		const hit = this.findLatestSession({ cwd: vaultRoot, prompt });
+		if (!hit || hit.id === this.settings.resumeSessionId) return;
+		await this.recordActiveSession(hit.id, hit.label);
+		this.statusBarItem?.setText(`jcode: active client → ${this.getClientDisplayLabel(hit.id, hit.label)}`);
+	}
+
+	private findLatestSession(opts: { cwd?: string; status?: string; prompt?: string }) {
+		const sessions = this.discoverJcodeSessionsWithMeta()
+			.filter((session) => {
+				if (opts.cwd && session.cwd && path.resolve(session.cwd) !== path.resolve(opts.cwd)) return false;
+				if (opts.status && session.status !== opts.status) return false;
+				if (opts.prompt && !this.sessionFileContainsPrompt(session.file, opts.prompt)) return false;
+				return true;
+			})
+			.sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt));
+		return sessions[0] ?? null;
+	}
+
+	private readSessionMeta(sessionId: string) {
+		if (!sessionId.trim()) return null;
+		const file = path.join(os.homedir(), ".jcode", "sessions", `${sessionId.trim()}.json`);
+		return this.readSessionMetaFile(file);
+	}
+
+	private discoverJcodeSessionsWithMeta() {
+		const dir = path.join(os.homedir(), ".jcode", "sessions");
+		try {
+			return fs.readdirSync(dir)
+				.filter((name) => name.endsWith(".json"))
+				.map((name) => this.readSessionMetaFile(path.join(dir, name)))
+				.filter((session): session is NonNullable<ReturnType<JcodePlugin["readSessionMetaFile"]>> => Boolean(session));
+		} catch {
+			return [];
+		}
+	}
+
+	private readSessionMetaFile(file: string) {
+		try {
+			const raw = JSON.parse(fs.readFileSync(file, "utf8")) as {
+				id?: string;
+				title?: string | null;
+				short_name?: string;
+				updated_at?: string;
+				last_active_at?: string;
+				created_at?: string;
+				working_dir?: string;
+				cwd?: string;
+				status?: string | Record<string, unknown>;
+			};
+			const id = raw.id || path.basename(file, ".json");
+			return {
+				id,
+				file,
+				label: normalizeSessionLabel(raw.title || raw.short_name || this.sessionDisplayName(id) || id),
+				lastUsedAt: raw.updated_at || raw.last_active_at || raw.created_at || "",
+				cwd: raw.working_dir || raw.cwd || "",
+				status: typeof raw.status === "string" ? raw.status : raw.status ? Object.keys(raw.status)[0] : "",
+			};
+		} catch {
+			return null;
+		}
+	}
+
+	private sessionFileContainsPrompt(file: string, prompt: string) {
+		const needle = prompt.trim();
+		if (!needle) return false;
+		try {
+			const haystack = fs.readFileSync(file, "utf8");
+			return haystack.includes(needle) || haystack.includes(needle.slice(0, 120));
+		} catch {
+			return false;
 		}
 	}
 
