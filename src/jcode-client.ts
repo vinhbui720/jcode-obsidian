@@ -284,11 +284,6 @@ class ReplTransport implements JcodeTransport {
 
 	private markReplFeedback(pending: NonNullable<ReplTransport["pending"]>) {
 		pending.seenFeedback = true;
-		if (pending.idleTimer) clearTimeout(pending.idleTimer);
-		pending.idleTimer = setTimeout(() => {
-			if (this.pending !== pending || !pending.seenFeedback) return;
-			this.finishPendingRepl(pending, pending.onEvent);
-		}, 1000);
 	}
 
 	private finishPendingRepl(
@@ -320,7 +315,8 @@ function normaliseReplTextLine(line: string, previous: string): string {
 
 function isReplNoiseLine(line: string): boolean {
 	const s = line.replace(/\s+/g, " ").trim().toLowerCase();
-	return s === "reload complete — continuing because a recovery directive was pending." ||
+	return /^→?\s*#\s*Skill:/i.test(line) ||
+		s === "reload complete — continuing because a recovery directive was pending." ||
 		s === "reload complete - continuing because a recovery directive was pending." ||
 		s === "a recovery directive was pending.";
 }

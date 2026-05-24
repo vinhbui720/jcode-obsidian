@@ -511,6 +511,7 @@ function splitFinalAssistantText(raw: string): { feedbacks: string[]; answer: st
 }
 
 function isToolTreeLine(trimmed: string): boolean {
+	if (/^→?\s*#\s*Skill:/i.test(trimmed)) return true;
 	if (/^[┌└│├─]/.test(trimmed)) return true;
 	if (/^[✓✗]\s+/.test(trimmed)) return true;
 	if (/^[│└├].*[✓✗]/.test(trimmed)) return true;

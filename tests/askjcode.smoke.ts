@@ -371,6 +371,11 @@ function testSectionInternals() {
 		},
 		"split final text keeps prose before and after skill/tool block"
 	);
+	eq(
+		_internals.splitFinalAssistantText("→ # Skill: gog-vinh\n\nMình check inbox personal ngay.\n\nMail cá nhân gần đây nhất là newsletter."),
+		{ feedbacks: [], answer: "Mình check inbox personal ngay.\n\nMail cá nhân gần đây nhất là newsletter." },
+		"split final text strips skill header noise"
+	);
 	const studyMailRaw = `Đang check mail tài khoản study cho tuần sau.
 Đã thấy email quan trọng. Mình check thêm keyword ngày tuần sau để không sót deadline/sự kiện.
   ✓ skill_manage · Load requested… · 791 tok
