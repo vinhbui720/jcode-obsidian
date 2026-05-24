@@ -262,6 +262,31 @@ async function testRunAskJcodeBuildsAnswerFromStatusWhenFinalTextEmpty() {
 	eq(out.includes("(empty response)"), false, "runAsk status fallback avoids empty response");
 }
 
+async function testRunAskJcodeKeepsStreamWhenDoneTextIsStale() {
+	const e = new FakeEditor("# mail\n/askjcode check mail personal");
+	e.cursor = { line: 1, ch: 20 };
+	await runAskJcode(
+		{ editor: e as never, noteText: e.getValue(), notePath: "n.md", vaultRoot: "/tmp" },
+		{
+			transport: {
+				cancel() {},
+				async ask(_opts, on) {
+					on({ type: "delta", text: "Mình sẽ dùng helper Gmail cá nhân vì tool Gmail mặc định chưa đăng nhập.\n" });
+					on({ type: "delta", text: "  ✓ gmail · Check most recent personal… · 18 tok\n" });
+					on({ type: "delta", text: "  ✓ skill_manage · Use personal Gog… · 791 tok\n\n" });
+					on({ type: "delta", text: "Mail cá nhân gần đây nhất là newsletter từ The Batch @ DeepLearning.AI, lúc 2026-05-23 02:10.\n" });
+					on({ type: "end", text: "→ Gmail is not configured. Run `jcode login google` to set up Gmail access." });
+					return { type: "end", text: "→ Gmail is not configured. Run `jcode login google` to set up Gmail access." };
+				},
+			},
+			statusBar: { setText() {}, clear() {} },
+		}
+	);
+	const out = e.getValue();
+	eq(out.includes("Mail cá nhân gần đây nhất là newsletter"), true, "runAsk stale done: keeps streamed helper answer");
+	eq(out.includes("Gmail is not configured"), false, "runAsk stale done: drops stale final tool error");
+}
+
 async function testRunAskJcodeRespectsStatusBarStreamingToggle() {
 	const e = new FakeEditor("# Speaking practice\n/askjcode say hi");
 	e.cursor = { line: 1, ch: 16 };
@@ -372,6 +397,7 @@ a recovery directive was pending.
 	await testRunAskJcodeNaturalFeedbackTrail();
 	await testRunAskJcodeUsesSavedDisplayTitle();
 	await testRunAskJcodeBuildsAnswerFromStatusWhenFinalTextEmpty();
+	await testRunAskJcodeKeepsStreamWhenDoneTextIsStale();
 	await testRunAskJcodeRespectsStatusBarStreamingToggle();
 	if (failures > 0) {
 		console.error(`\n${failures} TEST(S) FAILED`);

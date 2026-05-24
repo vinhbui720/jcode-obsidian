@@ -129,7 +129,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 				break;
 			case "end":
 				flushCurrentProse(runState);
-				if (e.text) accumulated = e.text;
+				if (e.text && e.text.trim().length > accumulated.trim().length) accumulated = e.text;
 				if (monitorTimer) {
 					clearInterval(monitorTimer);
 					monitorTimer = null;
