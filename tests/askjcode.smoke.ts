@@ -306,6 +306,7 @@ function testSectionInternals() {
 	eq(_internals.activityKey("  A   Status  "), "a status", "activity key normalizes whitespace");
 	eq(_internals.shouldShowLiveStatus("opening websocket"), false, "live status hides websocket noise");
 	eq(_internals.shouldShowLiveStatus("persistent jcode client running: session_x"), false, "live status hides session noise");
+	eq(_internals.shouldShowLiveStatus("sending prompt to persistent jcode client"), false, "live status hides repl send noise");
 	eq(_internals.shouldShowLiveStatus("thinking hard"), true, "live status keeps meaningful text");
 	eq(_internals.prettifyToolName("skill_manage"), "skill", "prettify tool name");
 	eq(_internals.cleanFeedbackSummary("[skill_manage] tool: bash."), "bash", "clean feedback summary");
@@ -317,6 +318,14 @@ function testSectionInternals() {
 	eq(_internals.buildStuckLine(timelineState, 14000).includes("Có vẻ đang chờ hơi lâu"), true, "stuck line appears after threshold");
 	_internals.finalizeTimelineEntry(timelineState, activeId, "bash xong: kiểm tra lịch.", "done", 15000);
 	eq(_internals.buildStuckLine(timelineState, 30000), "", "stuck line clears when no running entry");
+	let rawActive: string | null = null;
+	const rawLive = { introLine: "thinking…", timeline: [], stuckLine: "" };
+	rawActive = _internals.absorbDeltaIntoLiveState(rawLive, rawActive, "Đang check mail tài khoản study cho tuần sau.\n", 1000);
+	rawActive = _internals.absorbDeltaIntoLiveState(rawLive, rawActive, "tool: bash\n", 1001);
+	rawActive = _internals.absorbDeltaIntoLiveState(rawLive, rawActive, "✓ bash · Search study mailbox f… · 210 tok\n", 1002);
+	eq(rawLive.introLine, "Đang check mail tài khoản study cho tuần sau.", "raw delta feedback updates live intro");
+	eq(rawLive.timeline.length, 1, "raw delta tool lines create timeline");
+	eq(rawLive.timeline[0].text.includes("bash xong"), true, "raw delta completed tool is readable");
 	eq(
 		_internals.splitFinalAssistantText("I’m launching it now.\n✓ batch · Launch app\n  ✓ bash · run\n41s · 78.4 tps · ↑77k ↓76"),
 		{ feedbacks: [], answer: "I’m launching it now." },
@@ -337,6 +346,20 @@ function testSectionInternals() {
 		},
 		"split final text keeps prose before and after skill/tool block"
 	);
+	const studyMailRaw = `Đang check mail tài khoản study cho tuần sau.
+Đã thấy email quan trọng. Mình check thêm keyword ngày tuần sau để không sót deadline/sự kiện.
+  ✓ skill_manage · Load requested… · 791 tok
+
+  tool: bash
+  ✓ bash · Search study mailbox f… · 210 tok
+    $ cd … d
+Reload complete — continuing because 
+a recovery directive was pending.
+
+19s · 72.1 tps · ↑24k ↓20`;
+	const parsedStudyMail = _internals.splitFinalAssistantText(studyMailRaw);
+	eq(parsedStudyMail.feedbacks, ["Đang check mail tài khoản study cho tuần sau. Đã thấy email quan trọng. Mình check thêm keyword ngày tuần sau để không sót deadline/sự kiện."], "split final study mail keeps feedback before tools");
+	eq(parsedStudyMail.answer, "Reload complete — continuing because a recovery directive was pending.", "split final study mail keeps recovery answer");
 }
 
 (async () => {

@@ -275,7 +275,7 @@ class ReplTransport implements JcodeTransport {
 			}
 			const text = normaliseReplTextLine(line, pending?.text ?? "");
 			if (!text) continue;
-			const e: JcodeEvent = { type: "delta", text };
+				const e: JcodeEvent = { type: "delta", text: text + "\n" };
 			if (pending) pending.text += e.text;
 			onEvent(e);
 		}

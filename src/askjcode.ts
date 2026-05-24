@@ -107,7 +107,9 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 			case "delta":
 				accumulated += e.text;
 				pushDeltaText(runState, e.text);
+				activeEntryId = absorbDeltaIntoLiveState(liveState, activeEntryId, e.text, Date.now());
 				if (statusBarStreaming) deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
+				updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 				break;
 			case "tool":
 				if (statusBarStreaming) {
@@ -421,8 +423,53 @@ function shouldShowLiveStatus(detail: string): boolean {
 	if (!s) return false;
 	if (s.includes("opening websocket")) return false;
 	if (s.includes("persistent jcode client running")) return false;
+	if (s.includes("sending prompt to persistent jcode client")) return false;
 	if (s.includes("session_")) return false;
 	return true;
+}
+
+function absorbDeltaIntoLiveState(
+	state: LiveState,
+	activeEntryId: string | null,
+	text: string,
+	nowMs: number
+): string | null {
+	let active = activeEntryId;
+	for (const rawLine of text.replace(/\r/g, "").split("\n")) {
+		const line = cleanFeedbackLine(rawLine);
+		if (!line || isMetricsLine(line) || isToolCommandLine(line)) continue;
+		const tool = parseRawToolLine(line);
+		if (tool) {
+			active = tool.status === "start"
+				? upsertTimelineEntry(state, active, tool.text, "running", nowMs)
+				: finalizeTimelineEntry(state, active, tool.text, "done", nowMs);
+			continue;
+		}
+		if (isToolTreeLine(line)) continue;
+		if (shouldShowLiveStatus(line)) state.introLine = line;
+	}
+	state.stuckLine = buildStuckLine(state, nowMs);
+	return active;
+}
+
+function parseRawToolLine(line: string): { status: "start" | "end"; text: string } | null {
+	const toolStart = /^tool:\s*([a-z0-9_-]+)(?:\s*[-–—:]\s*(.+))?$/i.exec(line);
+	if (toolStart) {
+		const name = prettifyToolName(toolStart[1]);
+		const summary = cleanFeedbackSummary(toolStart[2] ?? "");
+		return { status: "start", text: summary ? `Đang dùng ${name} để ${summary}.` : `Đang dùng ${name}...` };
+	}
+	const done = /^[✓✔]\s+([a-z0-9_-]+)(?:\s*·\s*(.+?))?(?:\s*·\s*.+)?$/i.exec(line);
+	if (done) {
+		const name = prettifyToolName(done[1]);
+		const summary = cleanFeedbackSummary(done[2] ?? "");
+		return { status: "end", text: summary ? `${name} xong: ${summary}.` : `${name} đã xong.` };
+	}
+	return null;
+}
+
+function isToolCommandLine(trimmed: string): boolean {
+	return /^\$\s*/.test(trimmed) || /^[a-z0-9_-]+:\s+\$\s*/i.test(trimmed);
 }
 
 function splitFinalAssistantText(raw: string): { feedbacks: string[]; answer: string } {
@@ -469,8 +516,7 @@ function isToolTreeLine(trimmed: string): boolean {
 	if (/^[│└├].*[✓✗]/.test(trimmed)) return true;
 	if (/^\[[a-z0-9_-]+\]$/i.test(trimmed)) return true;
 	if (/^tool:\s+/i.test(trimmed)) return true;
-	if (/^\$\s*/.test(trimmed)) return true;
-	if (/^[a-z0-9_-]+:\s+\$\s*/i.test(trimmed)) return true;
+	if (isToolCommandLine(trimmed)) return true;
 	return false;
 }
 
@@ -604,4 +650,5 @@ export const _internals = {
 	upsertTimelineEntry,
 	finalizeTimelineEntry,
 	buildStuckLine,
+	absorbDeltaIntoLiveState,
 };
