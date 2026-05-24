@@ -62,7 +62,7 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	contextBroadcastEnabled: true,
 	contextFilePath: "",
 	maxSelectionChars: 12000,
-	transport: "repl",
+	transport: "stdio",
 	jcodeBinary: "jcode",
 	pairingHost: "",
 	pairingToken: "",
@@ -152,7 +152,7 @@ export class JcodeSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Transport")
 			.setDesc(
-				"How /askjcode talks to jcode. 'repl' keeps one persistent jcode client alive while Obsidian is open. 'stdio' spawns per request. 'websocket' is future gateway pairing."
+				"How /askjcode talks to jcode. 'persisted run' appends turns to the selected jcode session so terminal resume sees them. 'REPL' is live but currently keeps some turns in-process only."
 			)
 			.addDropdown((dd) =>
 				dd
