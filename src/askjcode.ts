@@ -76,51 +76,57 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	let sessionId = deps.resumeSessionId;
 	let errored = false;
 	const liveState = createLiveState("thinking…");
+	const runState = createRunState();
 
 	const onEvent = (e: JcodeEvent) => {
-			switch (e.type) {
-				case "start":
-					if (e.sessionId) {
-						sessionId = e.sessionId;
-						deps.saveSessionId?.(e.sessionId);
-					}
-					if (statusBarStreaming) {
-						deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
-					}
+		switch (e.type) {
+			case "start":
+				if (e.sessionId) {
+					sessionId = e.sessionId;
+					deps.saveSessionId?.(e.sessionId);
+				}
+				if (statusBarStreaming) {
+					deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
+				}
+				updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
+				break;
+			case "status":
+				if (statusBarStreaming) deps.statusBar.setText(`jcode: ${e.detail}`);
+				if (shouldPersistStatusAsProse(e.detail)) pushProseLine(runState, e.detail);
+				if (shouldShowLiveStatus(e.detail)) {
+					liveState.toolLine = cleanFeedbackLine(e.detail);
 					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
-					break;
-				case "status":
-					if (statusBarStreaming) deps.statusBar.setText(`jcode: ${e.detail}`);
-					if (shouldShowLiveStatus(e.detail)) {
-						liveState.toolLine = cleanFeedbackLine(e.detail);
-						updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
-					}
-					break;
-				case "delta":
-					accumulated += e.text;
-					if (statusBarStreaming) deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
-					break;
-				case "tool":
-					if (statusBarStreaming) {
-						deps.statusBar.setText(
-							`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
-						);
-					}
-					liveState.toolLine = formatToolLine(e);
-					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
-					break;
-				case "end":
-					if (e.text) accumulated = e.text;
-					deps.statusBar.setText("jcode: done");
-					break;
-				case "error":
-					errored = true;
-					deps.statusBar.setText(`jcode: error`);
-					liveState.toolLine = cleanFeedbackLine(e.message);
-					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
-					break;
-			}
-		};
+				}
+				break;
+			case "delta":
+				accumulated += e.text;
+				pushDeltaText(runState, e.text);
+				if (statusBarStreaming) deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
+				break;
+			case "tool":
+				if (statusBarStreaming) {
+					deps.statusBar.setText(
+						`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
+					);
+				}
+				if (e.status === "start") flushCurrentProse(runState);
+				liveState.toolLine = formatToolLine(e);
+				updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
+				break;
+			case "end":
+				flushCurrentProse(runState);
+				if (e.text) accumulated = e.text;
+				deps.statusBar.setText("jcode: done");
+				break;
+			case "error":
+				errored = true;
+				flushCurrentProse(runState);
+				deps.statusBar.setText(`jcode: error`);
+				liveState.toolLine = cleanFeedbackLine(e.message);
+				updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
+				break;
+		}
+	};
 
 	const askOpts: AskOptions = {
 		message: composed,
@@ -138,7 +144,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 			`jcode error: ${err instanceof Error ? err.message : String(err)}`;
 	}
 
-	replaceLiveStatusWithCallout(ctx.editor, liveBlock, title, accumulated, errored);
+	replaceLiveStatusWithCallout(ctx.editor, liveBlock, title, accumulated, errored, runState);
 
 	setTimeout(() => deps.statusBar.clear(), 4000);
 	return true;
@@ -232,6 +238,11 @@ interface LiveState {
 	toolLine: string;
 }
 
+interface RunState {
+	proseSegments: string[];
+	currentProseLines: string[];
+}
+
 function insertLiveStatus(
 	editor: Editor,
 	triggerLine: number,
@@ -259,16 +270,23 @@ function replaceLiveStatusWithCallout(
 	live: LiveBlock,
 	title: string,
 	text: string,
-	errored: boolean
+	errored: boolean,
+	runState: RunState
 ) {
 	const kind = errored ? "danger" : "note";
 	const renderedKind = errored ? "danger" : "jcode";
 	const label = errored ? `${title} error` : title;
 	const parsed = splitFinalAssistantText(text);
-	const feedbacks = errored ? [] : parsed.feedbacks;
+	const structured = buildStructuredResult(runState);
+	const feedbacks = errored
+		? []
+		: (structured.feedbacks.length > 0 ? structured.feedbacks : parsed.feedbacks);
+	const parsedAnswer = parsed.answer.trim();
+	const structuredAnswer = structured.answer.trim();
+	const preferredAnswer = parsedAnswer || structuredAnswer;
 	const safe = errored
 		? (text.trim() || "(no output)")
-		: (parsed.answer.trim() || "(empty response)");
+		: (preferredAnswer || "(empty response)");
 	const lines = [`> [!${renderedKind}]+ ${label}`];
 	for (const feedback of feedbacks) lines.push(`> - ${feedback}`);
 	if (feedbacks.length > 0) lines.push(">");
@@ -297,6 +315,10 @@ function renderLiveBlock(title: string, state: LiveState): string {
 
 function createLiveState(toolLine: string): LiveState {
 	return { toolLine };
+}
+
+function createRunState(): RunState {
+	return { proseSegments: [], currentProseLines: [] };
 }
 
 function formatToolLine(e: Extract<JcodeEvent, { type: "tool" }>): string {
@@ -378,6 +400,42 @@ function cleanFeedbackLine(s: string): string {
 	return s.replace(/\s+/g, " ").trim();
 }
 
+function pushDeltaText(state: RunState, text: string) {
+	for (const part of text.replace(/\r/g, "").split("\n")) {
+		const trimmed = part.trim();
+		if (!trimmed) {
+			if (state.currentProseLines.length > 0 && state.currentProseLines[state.currentProseLines.length - 1] !== "") {
+				state.currentProseLines.push("");
+			}
+			continue;
+		}
+		pushProseLine(state, trimmed);
+	}
+}
+
+function pushProseLine(state: RunState, line: string) {
+	const trimmed = cleanFeedbackLine(line);
+	if (!trimmed) return;
+	if (isToolTreeLine(trimmed) || isMetricsLine(trimmed)) return;
+	state.currentProseLines.push(trimmed);
+}
+
+function flushCurrentProse(state: RunState) {
+	const text = normalizeProseBlock(state.currentProseLines);
+	if (text) state.proseSegments.push(text);
+	state.currentProseLines = [];
+}
+
+function buildStructuredResult(state: RunState): { feedbacks: string[]; answer: string } {
+	flushCurrentProse(state);
+	if (state.proseSegments.length === 0) return { feedbacks: [], answer: "" };
+	if (state.proseSegments.length === 1) return { feedbacks: [], answer: state.proseSegments[0] };
+	return {
+		feedbacks: state.proseSegments.slice(0, -1),
+		answer: state.proseSegments[state.proseSegments.length - 1] ?? "",
+	};
+}
+
 function prettifyToolName(name: string): string {
 	const clean = cleanFeedbackLine(name).toLowerCase();
 	if (clean === "bash") return "bash";
@@ -393,6 +451,15 @@ function cleanFeedbackSummary(s: string): string {
 	text = text.replace(/^tool:\s*/i, "");
 	text = text.replace(/[.;:,\s]+$/g, "");
 	return text;
+}
+
+function shouldPersistStatusAsProse(detail: string): boolean {
+	const s = cleanFeedbackLine(detail);
+	if (!shouldShowLiveStatus(s)) return false;
+	if (/^thinking(…|\.\.\.)?$/i.test(s)) return false;
+	if (/^connected/i.test(s)) return false;
+	if (/streaming/i.test(s)) return false;
+	return /[.。!！?？:]$/.test(s) || s.length > 40;
 }
 
 function normalizeProseBlock(lines: string[]): string {
@@ -450,4 +517,6 @@ export const _internals = {
 	splitFinalAssistantText,
 	prettifyToolName,
 	cleanFeedbackSummary,
+	shouldPersistStatusAsProse,
+	buildStructuredResult,
 };

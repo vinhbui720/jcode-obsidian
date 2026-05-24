@@ -234,6 +234,34 @@ async function testRunAskJcodeUsesSavedDisplayTitle() {
 	eq(e.getValue().includes("> [!jcode]+ saved session title"), true, "runAsk uses saved display title");
 }
 
+async function testRunAskJcodeBuildsAnswerFromStatusWhenFinalTextEmpty() {
+	const e = new FakeEditor("# gog-vinh\n/askjcode check lịch tuần sau");
+	e.cursor = { line: 1, ch: 20 };
+	await runAskJcode(
+		{ editor: e as never, noteText: e.getValue(), notePath: "n.md", vaultRoot: "/tmp" },
+		{
+			transport: {
+				cancel() {},
+				async ask(_opts, on) {
+					on({ type: "status", detail: "Mình sẽ kiểm tra Calendar tuần sau cho account personal." });
+					on({ type: "status", detail: "week.sh trả “next 7 days”, mình sẽ lọc đúng tuần sau theo lịch: 2026-05-25 đến 2026-06-01." });
+					on({ type: "tool", name: "bash", status: "start", summary: "Check next week calendar" });
+					on({ type: "tool", name: "bash", status: "end", summary: "Check next week calendar" });
+					on({ type: "status", detail: "Reload complete — continuing because a recovery directive was pending." });
+					on({ type: "end", text: "" });
+					return { type: "end", text: "" };
+				},
+			},
+			statusBar: { setText() {}, clear() {} },
+		}
+	);
+	const out = e.getValue();
+	eq(out.includes("> - Mình sẽ kiểm tra Calendar tuần sau cho account personal."), true, "runAsk status fallback keeps first feedback");
+	eq(out.includes("week.sh trả “next 7 days”"), true, "runAsk status fallback keeps second feedback");
+	eq(out.includes("Reload complete — continuing because a recovery directive was pending."), true, "runAsk status fallback uses last prose as answer");
+	eq(out.includes("(empty response)"), false, "runAsk status fallback avoids empty response");
+}
+
 async function testRunAskJcodeRespectsStatusBarStreamingToggle() {
 	const e = new FakeEditor("# Speaking practice\n/askjcode say hi");
 	e.cursor = { line: 1, ch: 16 };
@@ -309,6 +337,7 @@ function testSectionInternals() {
 	await testRunAskJcodeLiveBlock();
 	await testRunAskJcodeNaturalFeedbackTrail();
 	await testRunAskJcodeUsesSavedDisplayTitle();
+	await testRunAskJcodeBuildsAnswerFromStatusWhenFinalTextEmpty();
 	await testRunAskJcodeRespectsStatusBarStreamingToggle();
 	if (failures > 0) {
 		console.error(`\n${failures} TEST(S) FAILED`);
