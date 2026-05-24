@@ -431,13 +431,6 @@ export default class JcodePlugin extends Plugin {
 			const adapter = this.app.vault.adapter as unknown as { basePath?: string };
 			const vaultRoot = adapter.basePath ?? "";
 			const noteText = editor.getValue();
-			if (await this.reconcileResumeSessionForVault(vaultRoot)) {
-				this.rebuildTransport();
-			}
-			if (!this.transport) {
-				new Notice("jcode: transport not configured.");
-				return;
-			}
 			const activeLabel =
 				normalizeSessionLabel(this.settings.activeSessionLabel || "") ||
 				deriveInitialSessionLabel(this.findCurrentHeading(editor), file?.basename ?? null);

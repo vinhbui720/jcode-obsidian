@@ -197,6 +197,11 @@ class ReplTransport implements JcodeTransport {
 			this.pending.reject(new Error("cancelled"));
 			this.pending = null;
 		}
+		if (this.child && !this.child.killed) {
+			this.child.kill("SIGTERM");
+		}
+		this.child = null;
+		this.lineBuffer = "";
 	}
 
 	async ask(opts: AskOptions, onEvent: (e: JcodeEvent) => void): Promise<JcodeEvent> {
