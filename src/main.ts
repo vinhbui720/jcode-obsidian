@@ -147,6 +147,13 @@ export default class JcodePlugin extends Plugin {
       callback: () => void this.createOrOpenTasksDashboard(),
     });
 
+    this.addCommand({
+      id: "jcode-daily-note-bootstrap",
+      name: "Daily note: create/open today and run briefing",
+      callback: () =>
+        void this.runDailyNoteBootstrap({ force: true, open: true }),
+    });
+
     // Layer-3: TODO aggregator on save (debounced).
     this.registerEvent(
       this.app.vault.on("modify", (f) => {
@@ -230,7 +237,7 @@ export default class JcodePlugin extends Plugin {
 
     void this.runSpacedRepOncePerDay();
     this.app.workspace.onLayoutReady(() => {
-      void this.runDailyNoteBootstrapOncePerDay();
+      void this.runDailyNoteBootstrap({ force: false, open: true });
     });
 
     console.log(
@@ -972,11 +979,11 @@ export default class JcodePlugin extends Plugin {
     }
   }
 
-  private async runDailyNoteBootstrapOncePerDay() {
+  private async runDailyNoteBootstrap(opts: { force: boolean; open: boolean }) {
     if (!this.settings.dailyNoteBootstrapEnabled) return;
     if (this.dailyBootstrapRunning) return;
     const today = this.vietnamDateString();
-    if (this.settings.lastDailyBootstrapDate === today) return;
+    if (!opts.force && this.settings.lastDailyBootstrapDate === today) return;
 
     this.dailyBootstrapRunning = true;
     const notePath = dailyNotePath(today, this.settings.dailyNoteFolder);
@@ -994,12 +1001,13 @@ export default class JcodePlugin extends Plugin {
           renderDailyNoteTemplate({
             date: today,
             created: this.vietnamTimestamp(),
-            notificationPlaceholder: "_Jcode daily briefing is queued..._",
             tasksGlobalFilter: this.settings.tasksGlobalFilter,
           }),
         );
         new Notice(`jcode: created daily note → ${notePath}`);
       }
+
+      if (opts.open) await this.openFile(file);
 
       if (this.settings.dailyNoteAutoFillNotification) {
         await this.fillDailyNotification(file, today);
@@ -1017,6 +1025,11 @@ export default class JcodePlugin extends Plugin {
     } finally {
       this.dailyBootstrapRunning = false;
     }
+  }
+
+  private async openFile(file: TFile) {
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file, { active: true });
   }
 
   private async fillDailyNotification(file: TFile, date: string) {
