@@ -10,6 +10,7 @@ import { TodoAggregator } from "./todo-aggregator";
 import { AutoTagger, TagSuggestion } from "./auto-tagger";
 import { SpacedRepPicker } from "./spaced-rep";
 import { AskJcodeSuggest } from "./askjcode-suggest";
+import { DEFAULT_TASKS_DASHBOARD_PATH, renderTasksDashboard } from "./obsidian-tasks";
 import {
 	deriveInitialSessionLabel,
 	findSavedSessionLabel,
@@ -127,6 +128,12 @@ export default class JcodePlugin extends Plugin {
 			id: "jcode-todo-rebuild",
 			name: "TODO aggregator: rebuild now",
 			callback: () => void this.runTodoAggregator(true),
+		});
+
+		this.addCommand({
+			id: "jcode-tasks-dashboard",
+			name: "Tasks: create/open dashboard",
+			callback: () => void this.createOrOpenTasksDashboard(),
 		});
 
 		// Layer-3: TODO aggregator on save (debounced).
@@ -332,9 +339,9 @@ export default class JcodePlugin extends Plugin {
 			fish: "🐟", frog: "🐸", giraffe: "🦒", goat: "🐐", goose: "🪿", hamster: "🐹", hawk: "🦅",
 			hedgehog: "🦔", hippo: "🦛", horse: "🐴", jaguar: "🐆", jellyfish: "🪼", kangaroo: "🦘",
 			koala: "🐨", ladybug: "🐞", lion: "🦁", llama: "🦙", lobster: "🦞", mosquito: "🦟", moth: "🦋",
-			octopus: "🐙", ox: "🐂", parrot: "🦜", peacock: "🦚", penguin: "🐧", pig: "🐷", "polar-bear": "🐻‍❄️",
+				moose: "🫎", octopus: "🐙", ox: "🐂", parrot: "🦜", peacock: "🦚", penguin: "🐧", pig: "🐷", "polar-bear": "🐻‍❄️",
 			ram: "🐏", rat: "🐀", scorpion: "🦂", shark: "🦈", sheep: "🐑", shrimp: "🦐", snake: "🐍",
-			spider: "🕷️", squid: "🦑", swan: "🦢", tiger: "🐯", turkey: "🦃", turtle: "🐢", unicorn: "🦄",
+				skunk: "🦨", spider: "🕷️", squid: "🦑", swan: "🦢", tiger: "🐯", turkey: "🦃", turtle: "🐢", unicorn: "🦄",
 			wolf: "🐺", worm: "🪱",
 		};
 		return icons[key] || "🤖";
@@ -490,7 +497,7 @@ export default class JcodePlugin extends Plugin {
 	private async syncActiveSessionFromPrompt(prompt: string, vaultRoot: string) {
 		// The actual jcode session cwd can be the vault root or a parent cwd after
 		// recovery/resume. The exact user prompt is the stronger source of truth.
-		const hit = this.findLatestSession({ prompt }) || this.findLatestSession({ cwd: vaultRoot, prompt });
+		const hit = this.findSessionForCurrentTransport() || this.findLatestSession({ prompt }) || this.findLatestSession({ cwd: vaultRoot, prompt });
 		if (!hit) return null;
 		if (hit.id === this.settings.resumeSessionId) return hit;
 		await this.recordActiveSession(hit.id, hit.label);
@@ -499,7 +506,7 @@ export default class JcodePlugin extends Plugin {
 	}
 
 	private async resolveDisplayTitleFromPrompt(prompt: string, vaultRoot: string) {
-		const hit = this.findLatestSession({ prompt }) || this.findLatestSession({ cwd: vaultRoot, prompt });
+		const hit = this.findSessionForCurrentTransport() || this.findLatestSession({ prompt }) || this.findLatestSession({ cwd: vaultRoot, prompt });
 		if (!hit) return null;
 		const previousId = this.settings.resumeSessionId;
 		const previousLabel = previousId ? this.getClientDisplayLabel(previousId, this.settings.activeSessionLabel) : "saved section";
@@ -511,6 +518,20 @@ export default class JcodePlugin extends Plugin {
 			title: nextLabel,
 			notice: hit.id !== previousId ? `Jcode switched section: ${previousLabel} → ${nextLabel}` : undefined,
 		};
+	}
+
+	private findSessionForCurrentTransport() {
+		const pid = this.transport?.getProcessId?.();
+		if (!pid) return null;
+		const sessions = this.discoverJcodeSessionsWithMeta()
+			.filter((session) => session.pids.includes(pid))
+			.sort((a, b) => {
+				const activeA = a.status === "Active" ? 1 : 0;
+				const activeB = b.status === "Active" ? 1 : 0;
+				if (activeA !== activeB) return activeB - activeA;
+				return b.lastUsedAt.localeCompare(a.lastUsedAt);
+			});
+		return sessions[0] ?? null;
 	}
 
 	private renameAdjacentJcodeCallout(editor: Editor, triggerLine: number, label: string) {
@@ -564,8 +585,10 @@ export default class JcodePlugin extends Plugin {
 				last_active_at?: string;
 				created_at?: string;
 				working_dir?: string;
-				cwd?: string;
-				status?: string | Record<string, unknown>;
+					cwd?: string;
+					status?: string | Record<string, unknown>;
+					last_pid?: number;
+					env_snapshots?: Array<{ pid?: number }>;
 			};
 			const id = raw.id || path.basename(file, ".json");
 			return {
@@ -575,6 +598,7 @@ export default class JcodePlugin extends Plugin {
 				lastUsedAt: raw.updated_at || raw.last_active_at || raw.created_at || "",
 				cwd: raw.working_dir || raw.cwd || "",
 				status: typeof raw.status === "string" ? raw.status : raw.status ? Object.keys(raw.status)[0] : "",
+				pids: [raw.last_pid, ...(raw.env_snapshots ?? []).map((snapshot) => snapshot.pid)].filter((pid): pid is number => typeof pid === "number"),
 			};
 		} catch {
 			return null;
@@ -684,6 +708,30 @@ export default class JcodePlugin extends Plugin {
 		} catch (err) {
 			console.error("[jcode-obsidian] todo aggregator failed:", err);
 			if (announce) new Notice("jcode: TODO aggregator failed (see console)");
+		}
+	}
+
+	private async createOrOpenTasksDashboard() {
+		const dashboardPath = this.settings.tasksDashboardPath?.trim() || DEFAULT_TASKS_DASHBOARD_PATH;
+		const existing = this.app.vault.getAbstractFileByPath(dashboardPath);
+		try {
+			if (!existing) {
+				await this.app.vault.create(
+					dashboardPath,
+					renderTasksDashboard({ globalFilter: this.settings.tasksGlobalFilter })
+				);
+				new Notice(`jcode: created Tasks dashboard → ${dashboardPath}`);
+			} else if (!(existing instanceof TFile)) {
+				new Notice(`jcode: ${dashboardPath} exists but is not a note.`);
+				return;
+			}
+
+			const leaf = this.app.workspace.getLeaf(false);
+			const file = this.app.vault.getAbstractFileByPath(dashboardPath);
+			if (file instanceof TFile) await leaf.openFile(file);
+		} catch (err) {
+			console.error("[jcode-obsidian] Tasks dashboard failed:", err);
+			new Notice("jcode: Tasks dashboard failed (see console)");
 		}
 	}
 

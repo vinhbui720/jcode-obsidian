@@ -46,6 +46,7 @@ export interface AskOptions {
 export interface JcodeTransport {
 	ask(opts: AskOptions, onEvent: (e: JcodeEvent) => void): Promise<JcodeEvent>;
 	cancel(): void;
+	getProcessId?(): number | null;
 	start?(opts: { cwd?: string; provider?: string; resumeSessionId?: string }, onEvent?: (e: JcodeEvent) => void): void;
 	setSessionId?(sessionId: string): void;
 }
@@ -75,6 +76,10 @@ class StdioTransport implements JcodeTransport {
 		if (this.child && !this.child.killed) {
 			this.child.kill("SIGTERM");
 		}
+	}
+
+	getProcessId() {
+		return this.child?.pid ?? null;
 	}
 
 	async ask(opts: AskOptions, onEvent: (e: JcodeEvent) => void): Promise<JcodeEvent> {
@@ -202,6 +207,10 @@ class ReplTransport implements JcodeTransport {
 		}
 		this.child = null;
 		this.lineBuffer = "";
+	}
+
+	getProcessId() {
+		return this.child?.pid ?? null;
 	}
 
 	async ask(opts: AskOptions, onEvent: (e: JcodeEvent) => void): Promise<JcodeEvent> {
@@ -367,6 +376,7 @@ function tryNormaliseJsonLine(line: string): JcodeEvent | null {
 class WebSocketTransport implements JcodeTransport {
 	constructor(_host: string, _token: string) {}
 	cancel() {}
+	getProcessId() { return null; }
 	async ask(_opts: AskOptions, onEvent: (e: JcodeEvent) => void): Promise<JcodeEvent> {
 		const e: JcodeEvent = {
 			type: "error",
