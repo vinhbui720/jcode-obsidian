@@ -214,6 +214,26 @@ async function testRunAskJcodeNaturalFeedbackTrail() {
 	eq(out.includes("gtk-launch"), false, "runAsk natural: tool command removed");
 }
 
+async function testRunAskJcodeUsesSavedDisplayTitle() {
+	const e = new FakeEditor("# local heading\n/askjcode say hi");
+	e.cursor = { line: 1, ch: 16 };
+	await runAskJcode(
+		{ editor: e as never, noteText: e.getValue(), notePath: "n.md", vaultRoot: "/tmp" },
+		{
+			transport: {
+				cancel() {},
+				async ask(_opts, on) {
+					on({ type: "end", text: "Done." });
+					return { type: "end", text: "Done." };
+				},
+			},
+			statusBar: { setText() {}, clear() {} },
+			displayTitle: "saved session title",
+		}
+	);
+	eq(e.getValue().includes("> [!note]+ saved session title"), true, "runAsk uses saved display title");
+}
+
 async function testRunAskJcodeRespectsStatusBarStreamingToggle() {
 	const e = new FakeEditor("# Speaking practice\n/askjcode say hi");
 	e.cursor = { line: 1, ch: 16 };
@@ -275,6 +295,7 @@ function testSectionInternals() {
 	testSectionInternals();
 	await testRunAskJcodeLiveBlock();
 	await testRunAskJcodeNaturalFeedbackTrail();
+	await testRunAskJcodeUsesSavedDisplayTitle();
 	await testRunAskJcodeRespectsStatusBarStreamingToggle();
 	if (failures > 0) {
 		console.error(`\n${failures} TEST(S) FAILED`);

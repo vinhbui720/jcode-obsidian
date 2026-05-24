@@ -7,6 +7,12 @@ import { TodoAggregator } from "./todo-aggregator";
 import { AutoTagger, TagSuggestion } from "./auto-tagger";
 import { SpacedRepPicker } from "./spaced-rep";
 import { AskJcodeSuggest } from "./askjcode-suggest";
+import {
+	deriveInitialSessionLabel,
+	findSavedSessionLabel,
+	normalizeSessionLabel,
+	upsertSavedSession,
+} from "./session-state";
 
 export default class JcodePlugin extends Plugin {
 	settings: JcodeSettings = DEFAULT_SETTINGS;
@@ -108,8 +114,7 @@ export default class JcodePlugin extends Plugin {
 			id: "jcode-clear-session",
 			name: "/askjcode: clear resume session id",
 			callback: async () => {
-				this.settings.resumeSessionId = "";
-				await this.saveData(this.settings);
+				await this.startNewSessionFromSettings();
 				new Notice("jcode: session cleared. Next /askjcode starts fresh.");
 			},
 		});
@@ -218,6 +223,7 @@ export default class JcodePlugin extends Plugin {
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		if (!Array.isArray(this.settings.knownSessions)) this.settings.knownSessions = [];
 	}
 
 	async saveSettings() {
@@ -249,14 +255,57 @@ export default class JcodePlugin extends Plugin {
 				provider: this.settings.provider || undefined,
 				resumeSessionId: this.settings.resumeSessionId || undefined,
 			},
-			(e) => {
-				if (e.type === "status") this.statusBarItem?.setText(`jcode: ${e.detail}`);
-				if (e.type === "start" && e.sessionId) {
-					this.settings.resumeSessionId = e.sessionId;
-					void this.saveData(this.settings);
+				(e) => {
+					if (e.type === "status") this.statusBarItem?.setText(`jcode: ${e.detail}`);
+					if (e.type === "start" && e.sessionId) {
+						void this.recordActiveSession(e.sessionId, this.getActiveSessionLabel());
+					}
 				}
-			}
-		);
+			);
+	}
+
+	getActiveSessionLabel() {
+		return normalizeSessionLabel(this.settings.activeSessionLabel || "");
+	}
+
+	async syncActiveSessionLabelFromResumeId() {
+		const id = this.settings.resumeSessionId.trim();
+		if (!id) return;
+		const saved = findSavedSessionLabel(this.settings.knownSessions, id);
+		if (saved) this.settings.activeSessionLabel = saved;
+	}
+
+	async activateSavedSession(sessionId: string) {
+		const id = sessionId.trim();
+		if (!id) return;
+		const saved = this.settings.knownSessions.find((s) => s.id === id);
+		this.settings.resumeSessionId = id;
+		if (saved?.label) this.settings.activeSessionLabel = saved.label;
+		await this.saveSettings();
+		this.transport?.setSessionId?.(id);
+		this.rebuildTransport();
+	}
+
+	async startNewSessionFromSettings() {
+		this.settings.resumeSessionId = "";
+		this.settings.activeSessionLabel = normalizeSessionLabel(this.settings.activeSessionLabel || "");
+		await this.saveSettings();
+		this.rebuildTransport();
+	}
+
+	private async recordActiveSession(sessionId: string, label: string) {
+		const cleanId = sessionId.trim();
+		const cleanLabel = normalizeSessionLabel(label);
+		if (!cleanId || !cleanLabel) return;
+		this.settings.resumeSessionId = cleanId;
+		this.settings.activeSessionLabel = cleanLabel;
+		this.settings.knownSessions = upsertSavedSession(this.settings.knownSessions, {
+			id: cleanId,
+			label: cleanLabel,
+			lastUsedAt: new Date().toISOString(),
+		});
+		this.transport?.setSessionId?.(cleanId);
+		await this.saveSettings();
 	}
 
 	rebuildAutoTagger() {
@@ -299,6 +348,13 @@ export default class JcodePlugin extends Plugin {
 		const adapter = this.app.vault.adapter as unknown as { basePath?: string };
 		const vaultRoot = adapter.basePath ?? "";
 		const noteText = editor.getValue();
+		const activeLabel =
+			normalizeSessionLabel(this.settings.activeSessionLabel || "") ||
+			deriveInitialSessionLabel(this.findCurrentHeading(editor), file?.basename ?? null);
+		if (!normalizeSessionLabel(this.settings.activeSessionLabel || "")) {
+			this.settings.activeSessionLabel = activeLabel;
+			await this.saveSettings();
+		}
 
 		this.currentRequestActive = true;
 		try {
@@ -316,14 +372,11 @@ export default class JcodePlugin extends Plugin {
 						clear: () => this.statusBarItem?.setText(""),
 					},
 					statusBarStreaming: this.settings.statusBarStreaming,
+					displayTitle: activeLabel,
 					notify: (m) => new Notice(m),
 					resumeSessionId: this.settings.resumeSessionId || undefined,
 					provider: this.settings.provider || undefined,
-					saveSessionId: (id) => {
-						this.settings.resumeSessionId = id;
-						this.transport?.setSessionId?.(id);
-						void this.saveData(this.settings);
-					},
+					saveSessionId: (id) => void this.recordActiveSession(id, activeLabel),
 				}
 			);
 			if (inserted) new Notice("jcode: done. Inserted response below the trigger line.");
@@ -385,6 +438,16 @@ export default class JcodePlugin extends Plugin {
 				getSelection: () => view.editor.getSelection(),
 			},
 		};
+	}
+
+	private findCurrentHeading(editor: Editor): string | null {
+		const line = editor.getCursor().line;
+		for (let i = line; i >= 0; i--) {
+			const raw = editor.getLine(i);
+			const m = /^(#{1,6})\s+(.+?)\s*$/.exec(raw);
+			if (m) return m[2].replace(/#+\s*$/, "").trim() || null;
+		}
+		return null;
 	}
 
 	private scheduleTodoRebuild() {

@@ -7,7 +7,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
     "install-local": "bash scripts/install-local.sh",
-    "test": "tsx tests/context-broadcaster.smoke.ts && tsx tests/askjcode.smoke.ts && tsx tests/askjcode-suggest.smoke.ts && tsx tests/todo-aggregator.smoke.ts && tsx tests/auto-tagger.smoke.ts && tsx tests/spaced-rep.smoke.ts",
+	    "test": "tsx tests/context-broadcaster.smoke.ts && tsx tests/session-state.smoke.ts && tsx tests/askjcode.smoke.ts && tsx tests/askjcode-suggest.smoke.ts && tsx tests/todo-aggregator.smoke.ts && tsx tests/auto-tagger.smoke.ts && tsx tests/spaced-rep.smoke.ts",
     "test:integration": "tsx tests/jcode-client.integration.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\""

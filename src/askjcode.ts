@@ -41,6 +41,7 @@ export interface AskJcodeDeps {
 	resumeSessionId?: string;
 	saveSessionId?: (id: string) => void;
 	provider?: string;
+	displayTitle?: string;
 }
 
 const PREFIX = "/askjcode";
@@ -56,7 +57,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	}
 
 	const { line, prompt, flags } = trigger;
-	const title = findSectionTitle(ctx.editor, line) ?? "jcode answer";
+	const title = deps.displayTitle?.trim() || findSectionTitle(ctx.editor, line) || "Conversation";
 
 	if (flags.has("notebooklm")) {
 		notify("jcode: --notebooklm route lands in M5. Use plain /askjcode for now.");

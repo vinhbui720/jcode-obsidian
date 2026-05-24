@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type JcodePlugin from "./main";
+import type { SavedJcodeSession } from "./session-state";
 
 export interface JcodeSettings {
 	/** Enable Layer 1: broadcast current-note context to other jcode clients. */
@@ -28,6 +29,8 @@ export interface JcodeSettings {
 
 	/** When set, /askjcode resumes this session to keep conversation state. */
 	resumeSessionId: string;
+	activeSessionLabel: string;
+	knownSessions: SavedJcodeSession[];
 
 	/** Hotkey for /askjcode submit. (Display only; actual key bound via command.) */
 	askjcodeHotkeyHint: string;
@@ -65,6 +68,8 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
 	pairingToken: "",
 	provider: "",
 	resumeSessionId: "",
+	activeSessionLabel: "",
+	knownSessions: [],
 	askjcodeHotkeyHint: "Ctrl+Enter (on a /askjcode line)",
 	statusBarStreaming: true,
 	todoEnabled: true,
@@ -191,20 +196,64 @@ export class JcodeSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName("Resume session id")
-			.setDesc(
-				"If set, /askjcode resumes this session so prior turns stay in context. Auto-filled after first /askjcode."
-			)
-			.addText((t) =>
-				t
-					.setPlaceholder("(none)")
-					.setValue(this.plugin.settings.resumeSessionId)
-					.onChange(async (v) => {
-						this.plugin.settings.resumeSessionId = v.trim();
-						await this.plugin.saveSettings();
-					})
-			);
+			new Setting(containerEl)
+				.setName("Active jcode section")
+				.setDesc(
+					"The natural title used by /askjcode. This stays active across Obsidian restarts until you switch to another saved session or start a new one."
+				)
+				.addText((t) =>
+					t
+						.setPlaceholder("Use current note section on first ask")
+						.setValue(this.plugin.settings.activeSessionLabel)
+						.onChange(async (v) => {
+							this.plugin.settings.activeSessionLabel = v;
+							await this.plugin.saveSettings();
+						})
+				)
+				.addButton((b) =>
+					b.setButtonText("Start new")
+						.setTooltip("Clear current resume session and start a fresh conversation section")
+						.onClick(async () => {
+							await this.plugin.startNewSessionFromSettings();
+							this.display();
+						})
+				);
+
+			const savedSessions = this.plugin.settings.knownSessions;
+			new Setting(containerEl)
+				.setName("Resume saved jcode section")
+				.setDesc(
+					"Choose one of your previously used jcode sessions. This becomes the active section and will be resumed by /askjcode next time too."
+				)
+				.addDropdown((dd) => {
+					dd.addOption("__new__", "Start new section");
+					for (const session of savedSessions) {
+						const suffix = session.id === this.plugin.settings.resumeSessionId ? " (active)" : "";
+						dd.addOption(session.id, `${session.label}${suffix}`);
+					}
+					dd.setValue(this.plugin.settings.resumeSessionId || "__new__").onChange(async (v) => {
+						if (v === "__new__") await this.plugin.startNewSessionFromSettings();
+						else await this.plugin.activateSavedSession(v);
+						this.display();
+					});
+				});
+
+			new Setting(containerEl)
+				.setName("Resume session id")
+				.setDesc(
+					"Advanced. The current active jcode session id. Usually you should use the dropdown above instead of editing this directly."
+				)
+				.addText((t) =>
+					t
+						.setPlaceholder("(none)")
+						.setValue(this.plugin.settings.resumeSessionId)
+						.onChange(async (v) => {
+							this.plugin.settings.resumeSessionId = v.trim();
+							await this.plugin.syncActiveSessionLabelFromResumeId();
+							await this.plugin.saveSettings();
+							this.plugin.rebuildTransport();
+						})
+				);
 
 		containerEl.createEl("h4", { text: "WebSocket transport (advanced)" });
 		containerEl.createEl("p", {
