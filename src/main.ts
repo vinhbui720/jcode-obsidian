@@ -263,7 +263,6 @@ export default class JcodePlugin extends Plugin {
 	private warmPersistentClient() {
 		if (!this.transport?.start || this.settings.transport !== "repl") return;
 		const adapter = this.app.vault.adapter as unknown as { basePath?: string };
-		void this.reconcileResumeSessionForVault(adapter.basePath ?? "");
 		this.transport.start(
 			{
 				cwd: adapter.basePath ?? undefined,
@@ -428,10 +427,17 @@ export default class JcodePlugin extends Plugin {
 			return;
 		}
 
-		const file = view.file;
-		const adapter = this.app.vault.adapter as unknown as { basePath?: string };
-		const vaultRoot = adapter.basePath ?? "";
-		const noteText = editor.getValue();
+			const file = view.file;
+			const adapter = this.app.vault.adapter as unknown as { basePath?: string };
+			const vaultRoot = adapter.basePath ?? "";
+			const noteText = editor.getValue();
+			if (await this.reconcileResumeSessionForVault(vaultRoot)) {
+				this.rebuildTransport();
+			}
+			if (!this.transport) {
+				new Notice("jcode: transport not configured.");
+				return;
+			}
 			const activeLabel =
 				normalizeSessionLabel(this.settings.activeSessionLabel || "") ||
 				deriveInitialSessionLabel(this.findCurrentHeading(editor), file?.basename ?? null);
@@ -439,9 +445,9 @@ export default class JcodePlugin extends Plugin {
 				? this.getClientDisplayLabel(this.settings.resumeSessionId, activeLabel)
 				: `${this.sessionIcon(activeLabel)} ${activeLabel}`;
 			if (!normalizeSessionLabel(this.settings.activeSessionLabel || "")) {
-			this.settings.activeSessionLabel = activeLabel;
-			await this.saveSettings();
-		}
+				this.settings.activeSessionLabel = activeLabel;
+				await this.saveSettings();
+			}
 
 		this.currentRequestActive = true;
 		try {
@@ -474,13 +480,15 @@ export default class JcodePlugin extends Plugin {
 		}
 	}
 
-	private async reconcileResumeSessionForVault(vaultRoot: string) {
-		if (!vaultRoot) return;
+	private async reconcileResumeSessionForVault(vaultRoot: string): Promise<boolean> {
+		if (!vaultRoot) return false;
 		const current = this.readSessionMeta(this.settings.resumeSessionId || "");
-		if (current?.status === "Active") return;
 		const latest = this.findLatestSession({ cwd: vaultRoot, status: "Active" });
-		if (!latest || latest.id === this.settings.resumeSessionId) return;
+		if (!latest) return false;
+		if (current?.id === latest.id && current.status === "Active") return false;
+		if (latest.id === this.settings.resumeSessionId && current?.status === "Active") return false;
 		await this.recordActiveSession(latest.id, latest.label);
+		return true;
 	}
 
 	private async syncActiveSessionFromPrompt(prompt: string, vaultRoot: string) {

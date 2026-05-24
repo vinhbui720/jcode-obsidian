@@ -280,6 +280,7 @@ interface RunState {
 	proseSegments: string[];
 	feedbackSegments: string[];
 	currentProseLines: string[];
+	tokenLine: string;
 }
 
 function insertLiveStatus(
@@ -376,7 +377,7 @@ function createLiveState(toolLine: string): LiveState {
 }
 
 function createRunState(): RunState {
-	return { proseSegments: [], feedbackSegments: [], currentProseLines: [] };
+	return { proseSegments: [], feedbackSegments: [], currentProseLines: [], tokenLine: "" };
 }
 
 function upsertTimelineEntry(
@@ -548,7 +549,11 @@ function isToolTreeLine(trimmed: string): boolean {
 }
 
 function isMetricsLine(trimmed: string): boolean {
-	return /^\d+(?:\.\d+)?s\s+·\s+/.test(trimmed) || /^reload complete/i.test(trimmed) || /^a recovery directive was pending\.?$/i.test(trimmed);
+	return isTokenUsageLine(trimmed) || /^reload complete/i.test(trimmed) || /^a recovery directive was pending\.?$/i.test(trimmed);
+}
+
+function isTokenUsageLine(trimmed: string): boolean {
+	return /^\d+(?:\.\d+)?s\s+·\s+/.test(trimmed);
 }
 
 function cleanFeedbackLine(s: string): string {
@@ -558,6 +563,10 @@ function cleanFeedbackLine(s: string): string {
 function pushDeltaText(state: RunState, text: string) {
 	for (const part of text.replace(/\r/g, "").split("\n")) {
 		const trimmed = part.trim();
+		if (isTokenUsageLine(trimmed)) {
+			state.tokenLine = trimmed;
+			continue;
+		}
 		if (!trimmed) {
 			if (state.currentProseLines.length > 0 && state.currentProseLines[state.currentProseLines.length - 1] !== "") {
 				state.currentProseLines.push("");
@@ -588,13 +597,18 @@ function buildStructuredResult(state: RunState): { feedbacks: string[]; answer: 
 	flushCurrentProse(state);
 	if (state.proseSegments.length === 0) {
 		const answer = state.feedbackSegments.pop() ?? "";
-		return { feedbacks: state.feedbackSegments, answer };
+		return { feedbacks: state.feedbackSegments, answer: appendTokenLine(answer, state.tokenLine) };
 	}
-	if (state.proseSegments.length === 1) return { feedbacks: state.feedbackSegments, answer: state.proseSegments[0] };
+	if (state.proseSegments.length === 1) return { feedbacks: state.feedbackSegments, answer: appendTokenLine(state.proseSegments[0], state.tokenLine) };
 	return {
 		feedbacks: [...state.feedbackSegments, ...state.proseSegments.slice(0, -1)],
-		answer: state.proseSegments[state.proseSegments.length - 1] ?? "",
+		answer: appendTokenLine(state.proseSegments[state.proseSegments.length - 1] ?? "", state.tokenLine),
 	};
+}
+
+function appendTokenLine(answer: string, tokenLine: string): string {
+	if (!tokenLine) return answer;
+	return `${answer.trim()}\n\n${tokenLine}`.trim();
 }
 
 function prettifyToolName(name: string): string {
