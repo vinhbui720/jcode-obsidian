@@ -177,7 +177,7 @@ async function testRunAskJcodeLiveBlock() {
 	);
 	eq(ok, true, "runAsk: returns true");
 	const out = e.getValue();
-	eq(out.includes("> [!note]+ Speaking practice"), true, "runAsk: uses nearest heading as title");
+	eq(out.includes("> [!jcode]+ Speaking practice"), true, "runAsk: uses nearest heading as title");
 	eq(out.includes("> Hello final"), true, "runAsk: inserts final answer");
 	eq(out.includes("_jcode: writing"), false, "runAsk: final replaces live status");
 	eq(out.includes("next"), true, "runAsk: preserves following line");
@@ -207,7 +207,7 @@ async function testRunAskJcodeNaturalFeedbackTrail() {
 		}
 	);
 	const out = e.getValue();
-	eq(out.includes("> [!note]+ penguin"), true, "runAsk natural: title uses section name");
+	eq(out.includes("> [!jcode]+ penguin"), true, "runAsk natural: title uses section name");
 	eq(out.includes("> I’m launching it now and checking that the process stays up."), true, "runAsk natural: final answer kept");
 	eq(out.includes("opening websocket"), false, "runAsk natural: transport noise removed");
 	eq(out.includes("✓ batch"), false, "runAsk natural: tool tree removed");
@@ -231,7 +231,7 @@ async function testRunAskJcodeUsesSavedDisplayTitle() {
 			displayTitle: "saved session title",
 		}
 	);
-	eq(e.getValue().includes("> [!note]+ saved session title"), true, "runAsk uses saved display title");
+	eq(e.getValue().includes("> [!jcode]+ saved session title"), true, "runAsk uses saved display title");
 }
 
 async function testRunAskJcodeRespectsStatusBarStreamingToggle() {
@@ -267,14 +267,17 @@ async function testRunAskJcodeRespectsStatusBarStreamingToggle() {
 function testSectionInternals() {
 	const e = new FakeEditor("# Top\ntext\n## Child ##\n/askjcode hi");
 	eq(_internals.findSectionTitle(e as never, 3), "Child", "section title strips trailing hashes");
-	eq(_internals.renderStatusBlock("Child", "connecting…"), "> [!note]+ Child\n> - connecting…\n", "status block render");
-	const live = _internals.renderLiveBlock("Child", { toolLine: "bash: running" });
-	eq(live.includes("> - bash: running"), true, "live block includes tool line");
+	eq(_internals.renderStatusBlock("Child", "connecting…"), "> [!jcode]+ Child\n> - connecting…\n", "status block render");
+	const live = _internals.renderLiveBlock("Child", { toolLine: "Đang dùng bash..." });
+	eq(live.includes("> - Đang dùng bash..."), true, "live block includes tool line");
 	eq(_internals.activityKey("  A   Status  "), "a status", "activity key normalizes whitespace");
 	eq(_internals.shouldShowLiveStatus("opening websocket"), false, "live status hides websocket noise");
 	eq(_internals.shouldShowLiveStatus("persistent jcode client running: session_x"), false, "live status hides session noise");
 	eq(_internals.shouldShowLiveStatus("thinking hard"), true, "live status keeps meaningful text");
-	eq(_internals.formatToolLine({ type: "tool", name: "bash", status: "start", summary: "gtk-launch" }), "bash: running — gtk-launch", "format tool line");
+	eq(_internals.prettifyToolName("skill_manage"), "skill", "prettify tool name");
+	eq(_internals.cleanFeedbackSummary("[skill_manage] tool: bash."), "bash", "clean feedback summary");
+	eq(_internals.formatToolLine({ type: "tool", name: "bash", status: "start", summary: "gtk-launch" }), "Đang dùng bash để gtk-launch.", "format tool line start");
+	eq(_internals.formatToolLine({ type: "tool", name: "bash", status: "end", summary: "gtk-launch" }), "bash xong: gtk-launch.", "format tool line end");
 	eq(
 		_internals.splitFinalAssistantText("I’m launching it now.\n✓ batch · Launch app\n  ✓ bash · run\n41s · 78.4 tps · ↑77k ↓76"),
 		{ feedbacks: [], answer: "I’m launching it now." },

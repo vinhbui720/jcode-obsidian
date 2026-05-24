@@ -7,3 +7,32 @@
 	font-size: 0.85em;
 	margin-top: 2px;
 }
+
+.callout[data-callout="jcode"] {
+	--callout-color: 88, 101, 242;
+	--callout-icon: lucide-sparkles;
+	border: 1px solid rgba(88, 101, 242, 0.18);
+	background: linear-gradient(180deg, rgba(88, 101, 242, 0.08), rgba(88, 101, 242, 0.04));
+	box-shadow: 0 8px 28px rgba(88, 101, 242, 0.08);
+	border-radius: 14px;
+}
+
+.callout[data-callout="jcode"] .callout-title {
+	font-weight: 700;
+	letter-spacing: 0.01em;
+}
+
+.callout[data-callout="jcode"] .callout-content {
+	line-height: 1.6;
+}
+
+.callout[data-callout="jcode"] ul,
+.callout[data-callout="jcode"] ol {
+	margin-block: 0.45rem 0.2rem;
+}
+
+.callout[data-callout="jcode"] p:first-child,
+.callout[data-callout="jcode"] ul:first-child,
+.callout[data-callout="jcode"] ol:first-child {
+	margin-top: 0.1rem;
+}

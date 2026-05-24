@@ -262,13 +262,14 @@ function replaceLiveStatusWithCallout(
 	errored: boolean
 ) {
 	const kind = errored ? "danger" : "note";
+	const renderedKind = errored ? "danger" : "jcode";
 	const label = errored ? `${title} error` : title;
 	const parsed = splitFinalAssistantText(text);
 	const feedbacks = errored ? [] : parsed.feedbacks;
 	const safe = errored
 		? (text.trim() || "(no output)")
 		: (parsed.answer.trim() || "(empty response)");
-	const lines = [`> [!${kind}]+ ${label}`];
+	const lines = [`> [!${renderedKind}]+ ${label}`];
 	for (const feedback of feedbacks) lines.push(`> - ${feedback}`);
 	if (feedbacks.length > 0) lines.push(">");
 	for (const l of safe.split("\n")) lines.push(`> ${l}`);
@@ -285,11 +286,11 @@ function replaceLiveBlock(editor: Editor, live: LiveBlock, replacement: string) 
 }
 
 function renderStatusBlock(title: string, status: string): string {
-	return `> [!note]+ ${title}\n> - ${status}\n`;
+	return `> [!jcode]+ ${title}\n> - ${status}\n`;
 }
 
 function renderLiveBlock(title: string, state: LiveState): string {
-	const lines = [`> [!note]+ ${title}`];
+	const lines = [`> [!jcode]+ ${title}`];
 	if (state.toolLine.trim()) lines.push(`> - ${state.toolLine.trim()}`);
 	return `${lines.join("\n")}\n`;
 }
@@ -300,8 +301,15 @@ function createLiveState(toolLine: string): LiveState {
 
 function formatToolLine(e: Extract<JcodeEvent, { type: "tool" }>): string {
 	const name = e.name || "tool";
-	const verb = e.status === "start" ? "running" : "done";
-	return `${name}: ${verb}${e.summary ? ` — ${cleanFeedbackLine(e.summary)}` : ""}`;
+	const label = prettifyToolName(name);
+	if (e.status === "start") {
+		return e.summary
+			? `Đang dùng ${label} để ${cleanFeedbackSummary(e.summary)}.`
+			: `Đang dùng ${label}...`;
+	}
+	return e.summary
+		? `${label} xong: ${cleanFeedbackSummary(e.summary)}.`
+		: `${label} đã xong.`;
 }
 
 function shouldShowLiveStatus(detail: string): boolean {
@@ -370,6 +378,23 @@ function cleanFeedbackLine(s: string): string {
 	return s.replace(/\s+/g, " ").trim();
 }
 
+function prettifyToolName(name: string): string {
+	const clean = cleanFeedbackLine(name).toLowerCase();
+	if (clean === "bash") return "bash";
+	if (clean === "batch") return "batch";
+	if (clean === "todo") return "todo";
+	if (clean === "skill_manage") return "skill";
+	return clean || "tool";
+}
+
+function cleanFeedbackSummary(s: string): string {
+	let text = cleanFeedbackLine(s);
+	text = text.replace(/^\[[^\]]+\]\s*/i, "");
+	text = text.replace(/^tool:\s*/i, "");
+	text = text.replace(/[.;:,\s]+$/g, "");
+	return text;
+}
+
 function normalizeProseBlock(lines: string[]): string {
 	if (lines.length === 0) return "";
 	const pieces: string[] = [];
@@ -423,4 +448,6 @@ export const _internals = {
 	shouldShowLiveStatus,
 	formatToolLine,
 	splitFinalAssistantText,
+	prettifyToolName,
+	cleanFeedbackSummary,
 };
