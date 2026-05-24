@@ -184,6 +184,36 @@ async function testRunAskJcodeLiveBlock() {
 	eq(statuses.includes("jcode: connecting…"), true, "runAsk: status bar connecting");
 }
 
+async function testRunAskJcodeRespectsStatusBarStreamingToggle() {
+	const e = new FakeEditor("# Speaking practice\n/askjcode say hi");
+	e.cursor = { line: 1, ch: 16 };
+	const statuses: string[] = [];
+	await runAskJcode(
+		{ editor: e as never, noteText: e.getValue(), notePath: "n.md", vaultRoot: "/tmp" },
+		{
+			transport: {
+				cancel() {},
+				async ask(_opts, on) {
+					on({ type: "start", model: "mock" });
+					on({ type: "status", detail: "thinking" });
+					on({ type: "delta", text: "Hello" });
+					on({ type: "tool", name: "bash", status: "start" });
+					on({ type: "end", text: "Hello final" });
+					return { type: "end", text: "Hello final" };
+				},
+			},
+			statusBar: { setText: (s) => statuses.push(s), clear: () => statuses.push("clear") },
+			statusBarStreaming: false,
+		}
+	);
+	eq(statuses.includes("jcode: connecting…"), true, "runAsk no-stream: initial connecting shown");
+	eq(statuses.includes("jcode: mock streaming…"), false, "runAsk no-stream: start update suppressed");
+	eq(statuses.includes("jcode: thinking"), false, "runAsk no-stream: status update suppressed");
+	eq(statuses.includes("jcode: 5 chars…"), false, "runAsk no-stream: delta update suppressed");
+	eq(statuses.includes("jcode: tool bash running"), false, "runAsk no-stream: tool update suppressed");
+	eq(statuses.includes("jcode: done"), true, "runAsk no-stream: final done shown");
+}
+
 function testSectionInternals() {
 	const e = new FakeEditor("# Top\ntext\n## Child ##\n/askjcode hi");
 	eq(_internals.findSectionTitle(e as never, 3), "Child", "section title strips trailing hashes");
@@ -206,6 +236,7 @@ function testSectionInternals() {
 	testInsertCallout();
 	testSectionInternals();
 	await testRunAskJcodeLiveBlock();
+	await testRunAskJcodeRespectsStatusBarStreamingToggle();
 	if (failures > 0) {
 		console.error(`\n${failures} TEST(S) FAILED`);
 		process.exit(1);

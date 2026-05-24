@@ -35,6 +35,7 @@ export interface AskJcodeDeps {
 		setText(text: string): void;
 		clear(): void;
 	};
+	statusBarStreaming?: boolean;
 	/** Surface a user-visible toast. In tests we pass a stub. */
 	notify?: (msg: string) => void;
 	resumeSessionId?: string;
@@ -47,6 +48,7 @@ const PREFIX = "/askjcode";
 /** Public entry; returns false if there is no /askjcode line under cursor. */
 export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Promise<boolean> {
 	const notify = deps.notify ?? ((m: string) => console.warn(m));
+	const statusBarStreaming = deps.statusBarStreaming ?? true;
 	const trigger = findTrigger(ctx.editor);
 	if (!trigger) {
 		notify('jcode: no "/askjcode ..." line at cursor. Type /askjcode then your question.');
@@ -76,33 +78,37 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	activities.set("connection", "connecting…");
 
 	const onEvent = (e: JcodeEvent) => {
-			switch (e.type) {
-				case "start":
-					if (e.sessionId) {
-						sessionId = e.sessionId;
-						deps.saveSessionId?.(e.sessionId);
-					}
-					deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
-					activities.set("connection", `${e.model || e.provider || "ready"} streaming…`);
-					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
-					break;
-				case "status":
-					deps.statusBar.setText(`jcode: ${e.detail}`);
-					activities.set(`status:${activityKey(e.detail)}`, e.detail);
-					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
-					break;
-				case "delta":
-					accumulated += e.text;
-					deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
-					activities.set("writing", `writing… ${accumulated.length} chars`);
-					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
-					break;
-				case "tool":
-					deps.statusBar.setText(
-						`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
-					);
-					activities.set(`tool:${e.name || "unknown"}`, `tool ${e.name || "unknown"}: ${e.status === "start" ? "running" : "done"}${e.summary ? ` — ${e.summary}` : ""}`);
-					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
+				switch (e.type) {
+					case "start":
+						if (e.sessionId) {
+							sessionId = e.sessionId;
+							deps.saveSessionId?.(e.sessionId);
+						}
+						if (statusBarStreaming) {
+							deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
+						}
+						activities.set("connection", `${e.model || e.provider || "ready"} streaming…`);
+						updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
+						break;
+					case "status":
+						if (statusBarStreaming) deps.statusBar.setText(`jcode: ${e.detail}`);
+						activities.set(`status:${activityKey(e.detail)}`, e.detail);
+						updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
+						break;
+					case "delta":
+						accumulated += e.text;
+						if (statusBarStreaming) deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
+						activities.set("writing", `writing… ${accumulated.length} chars`);
+						updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
+						break;
+					case "tool":
+						if (statusBarStreaming) {
+							deps.statusBar.setText(
+								`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
+							);
+						}
+						activities.set(`tool:${e.name || "unknown"}`, `tool ${e.name || "unknown"}: ${e.status === "start" ? "running" : "done"}${e.summary ? ` — ${e.summary}` : ""}`);
+						updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
 					break;
 				case "end":
 					if (e.text) accumulated = e.text;

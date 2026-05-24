@@ -29,10 +29,11 @@ export default class JcodePlugin extends Plugin {
 		});
 
 		this.applyContextBroadcastSetting();
-		this.rebuildTransport();
-		this.rebuildAutoTagger();
+			this.rebuildTransport();
+			this.rebuildAutoTagger();
+			this.registerContextBroadcastEvents();
 
-		this.statusBarItem = this.addStatusBarItem();
+			this.statusBarItem = this.addStatusBarItem();
 		this.statusBarItem.setText("");
 
 		this.addSettingTab(new JcodeSettingTab(this.app, this));
@@ -201,7 +202,9 @@ export default class JcodePlugin extends Plugin {
 			})
 		);
 
-		console.log("[jcode-obsidian] loaded. context file:", this.broadcaster.getFilePath());
+			void this.runSpacedRepOncePerDay();
+
+			console.log("[jcode-obsidian] loaded. context file:", this.broadcaster.getFilePath());
 	}
 
 	async onunload() {
@@ -312,6 +315,7 @@ export default class JcodePlugin extends Plugin {
 						setText: (s) => this.statusBarItem?.setText(s),
 						clear: () => this.statusBarItem?.setText(""),
 					},
+					statusBarStreaming: this.settings.statusBarStreaming,
 					notify: (m) => new Notice(m),
 					resumeSessionId: this.settings.resumeSessionId || undefined,
 					provider: this.settings.provider || undefined,
@@ -355,17 +359,20 @@ export default class JcodePlugin extends Plugin {
 			void this.broadcaster.writeOfflineMarker();
 			return;
 		}
+		this.broadcaster.scheduleWrite();
+	}
 
-		const b = this.broadcaster;
+	private registerContextBroadcastEvents() {
+		const scheduleIfEnabled = () => {
+			if (!this.settings.contextBroadcastEnabled) return;
+			this.broadcaster?.scheduleWrite();
+		};
 		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", () => b.scheduleWrite())
+			this.app.workspace.on("active-leaf-change", scheduleIfEnabled)
 		);
-		this.registerEvent(this.app.workspace.on("file-open", () => b.scheduleWrite()));
-		this.registerEvent(
-			this.app.workspace.on("editor-change", () => b.scheduleWrite())
-		);
-		this.registerEvent(this.app.vault.on("modify", () => b.scheduleWrite()));
-		b.scheduleWrite();
+		this.registerEvent(this.app.workspace.on("file-open", scheduleIfEnabled));
+		this.registerEvent(this.app.workspace.on("editor-change", scheduleIfEnabled));
+		this.registerEvent(this.app.vault.on("modify", scheduleIfEnabled));
 	}
 
 	private resolveActiveMarkdownView(): ViewWithEditor | null {
