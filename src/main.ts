@@ -432,10 +432,13 @@ export default class JcodePlugin extends Plugin {
 		const adapter = this.app.vault.adapter as unknown as { basePath?: string };
 		const vaultRoot = adapter.basePath ?? "";
 		const noteText = editor.getValue();
-		const activeLabel =
-			normalizeSessionLabel(this.settings.activeSessionLabel || "") ||
-			deriveInitialSessionLabel(this.findCurrentHeading(editor), file?.basename ?? null);
-		if (!normalizeSessionLabel(this.settings.activeSessionLabel || "")) {
+			const activeLabel =
+				normalizeSessionLabel(this.settings.activeSessionLabel || "") ||
+				deriveInitialSessionLabel(this.findCurrentHeading(editor), file?.basename ?? null);
+			const displayLabel = this.settings.resumeSessionId
+				? this.getClientDisplayLabel(this.settings.resumeSessionId, activeLabel)
+				: `${this.sessionIcon(activeLabel)} ${activeLabel}`;
+			if (!normalizeSessionLabel(this.settings.activeSessionLabel || "")) {
 			this.settings.activeSessionLabel = activeLabel;
 			await this.saveSettings();
 		}
@@ -456,7 +459,7 @@ export default class JcodePlugin extends Plugin {
 						clear: () => this.statusBarItem?.setText(""),
 					},
 					statusBarStreaming: this.settings.statusBarStreaming,
-					displayTitle: activeLabel,
+					displayTitle: displayLabel,
 					notify: (m) => new Notice(m),
 					resumeSessionId: this.settings.resumeSessionId || undefined,
 					provider: this.settings.provider || undefined,
