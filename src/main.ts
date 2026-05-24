@@ -15,6 +15,12 @@ import {
   renderTasksDashboard,
 } from "./obsidian-tasks";
 import {
+  dailyNotePath,
+  formatDailyBriefingPrompt,
+  renderDailyNoteTemplate,
+  replaceDailyNotification,
+} from "./daily-note";
+import {
   deriveInitialSessionLabel,
   findSavedSessionLabel,
   normalizeSessionLabel,
@@ -31,6 +37,7 @@ export default class JcodePlugin extends Plugin {
   private lastAskSubmitAt = 0;
   private todoTimer: number | null = null;
   private lastSuggestion: TagSuggestion | null = null;
+  private dailyBootstrapRunning = false;
 
   async onload() {
     await this.loadSettings();
@@ -222,6 +229,9 @@ export default class JcodePlugin extends Plugin {
     );
 
     void this.runSpacedRepOncePerDay();
+    this.app.workspace.onLayoutReady(() => {
+      void this.runDailyNoteBootstrapOncePerDay();
+    });
 
     console.log(
       "[jcode-obsidian] loaded. context file:",
@@ -960,6 +970,177 @@ export default class JcodePlugin extends Plugin {
       console.error("[jcode-obsidian] Tasks dashboard failed:", err);
       new Notice("jcode: Tasks dashboard failed (see console)");
     }
+  }
+
+  private async runDailyNoteBootstrapOncePerDay() {
+    if (!this.settings.dailyNoteBootstrapEnabled) return;
+    if (this.dailyBootstrapRunning) return;
+    const today = this.vietnamDateString();
+    if (this.settings.lastDailyBootstrapDate === today) return;
+
+    this.dailyBootstrapRunning = true;
+    const notePath = dailyNotePath(today, this.settings.dailyNoteFolder);
+    try {
+      await this.ensureFolderPath(path.dirname(notePath));
+      const existing = this.app.vault.getAbstractFileByPath(notePath);
+      let file: TFile;
+      if (existing instanceof TFile) {
+        file = existing;
+      } else if (existing) {
+        throw new Error(`${notePath} exists but is not a Markdown note`);
+      } else {
+        file = await this.app.vault.create(
+          notePath,
+          renderDailyNoteTemplate({
+            date: today,
+            created: this.vietnamTimestamp(),
+            notificationPlaceholder: "_Jcode daily briefing is queued..._",
+            tasksGlobalFilter: this.settings.tasksGlobalFilter,
+          }),
+        );
+        new Notice(`jcode: created daily note → ${notePath}`);
+      }
+
+      if (this.settings.dailyNoteAutoFillNotification) {
+        await this.fillDailyNotification(file, today);
+      }
+
+      this.settings.lastDailyBootstrapDate = today;
+      await this.saveSettings();
+    } catch (err) {
+      console.error("[jcode-obsidian] daily note bootstrap failed:", err);
+      new Notice("jcode: daily note bootstrap failed (see console)");
+      // Guard the day even on failure so a broken Google/API path does not retry
+      // on every Obsidian restart and spam the live jcode client.
+      this.settings.lastDailyBootstrapDate = today;
+      await this.saveSettings();
+    } finally {
+      this.dailyBootstrapRunning = false;
+    }
+  }
+
+  private async fillDailyNotification(file: TFile, date: string) {
+    if (!this.transport) throw new Error("jcode transport is not configured");
+    if (this.currentRequestActive) {
+      await this.replaceDailyNotificationInFile(
+        file,
+        "_Skipped: another /askjcode request was already running._",
+      );
+      return;
+    }
+
+    const adapter = this.app.vault.adapter as unknown as { basePath?: string };
+    const vaultRoot = adapter.basePath ?? "";
+    this.currentRequestActive = true;
+    this.statusBarItem?.setText("jcode: daily briefing running");
+    await this.replaceDailyNotificationInFile(
+      file,
+      `_Running daily briefing with ${this.getActiveClientName()}..._`,
+    );
+
+    let text = "";
+    try {
+      const prompt = formatDailyBriefingPrompt(date);
+      const result = await this.transport.ask(
+        {
+          message: prompt,
+          cwd: vaultRoot || undefined,
+          provider: this.settings.provider || undefined,
+          resumeSessionId: this.settings.resumeSessionId || undefined,
+          timeoutMs: 5 * 60_000,
+        },
+        (event) => {
+          if (event.type === "status")
+            this.statusBarItem?.setText(`jcode: ${event.detail}`);
+          if (event.type === "start" && event.sessionId) {
+            void this.recordActiveSession(
+              event.sessionId,
+              this.getActiveSessionLabel(),
+            );
+          }
+          if (event.type === "delta") text += event.text;
+          if (event.type === "error") text += `\n_Error: ${event.message}_\n`;
+        },
+      );
+      const finalText = result.type === "end" ? result.text || text : text;
+      await this.syncActiveSessionFromPrompt(prompt, vaultRoot);
+      await this.replaceDailyNotificationInFile(
+        file,
+        finalText.trim() || "_Daily briefing returned no text._",
+      );
+      new Notice(`jcode: daily briefing filled → ${file.path}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.replaceDailyNotificationInFile(
+        file,
+        `_Daily briefing failed: ${message}_`,
+      );
+      console.error("[jcode-obsidian] daily briefing failed:", err);
+    } finally {
+      this.currentRequestActive = false;
+      this.statusBarItem?.setText("");
+    }
+  }
+
+  private async replaceDailyNotificationInFile(
+    file: TFile,
+    replacement: string,
+  ) {
+    const content = await this.app.vault.read(file);
+    await this.app.vault.modify(
+      file,
+      replaceDailyNotification(content, replacement),
+    );
+  }
+
+  private async ensureFolderPath(folderPath: string) {
+    const clean = folderPath.replace(/^\/+|\/+$/g, "");
+    if (!clean || clean === ".") return;
+    const parts = clean.split("/").filter(Boolean);
+    let current = "";
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      const existing = this.app.vault.getAbstractFileByPath(current);
+      if (existing) continue;
+      await this.app.vault.createFolder(current);
+    }
+  }
+
+  private vietnamDateString(date = new Date()) {
+    return this.formatDateInTimeZone(date, "Asia/Ho_Chi_Minh");
+  }
+
+  private vietnamTimestamp(date = new Date()) {
+    const parts = this.dateTimeParts(date, "Asia/Ho_Chi_Minh");
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+07:00`;
+  }
+
+  private formatDateInTimeZone(date: Date, timeZone: string) {
+    const parts = this.dateTimeParts(date, timeZone);
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+
+  private dateTimeParts(date: Date, timeZone: string) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(date);
+    const get = (type: string) =>
+      parts.find((part) => part.type === type)?.value ?? "00";
+    return {
+      year: get("year"),
+      month: get("month"),
+      day: get("day"),
+      hour: get("hour"),
+      minute: get("minute"),
+      second: get("second"),
+    };
   }
 
   private makeSpacedRepPicker() {

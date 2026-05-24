@@ -2,6 +2,7 @@ import { App, PluginSettingTab, Setting } from "obsidian";
 import type JcodePlugin from "./main";
 import type { SavedJcodeSession } from "./session-state";
 import { DEFAULT_TASKS_DASHBOARD_PATH } from "./obsidian-tasks";
+import { DEFAULT_DAILY_NOTE_FOLDER } from "./daily-note";
 
 export interface JcodeSettings {
   /** Enable Layer 1: broadcast current-note context to other jcode clients. */
@@ -47,6 +48,12 @@ export interface JcodeSettings {
   tasksDashboardPath: string;
   tasksGlobalFilter: string;
 
+  /** Daily note bootstrap. */
+  dailyNoteBootstrapEnabled: boolean;
+  dailyNoteFolder: string;
+  dailyNoteAutoFillNotification: boolean;
+  lastDailyBootstrapDate: string;
+
   /** B2 — Auto-tag from title. */
   autoTagEnabled: boolean;
   autoTagMode: "suggest" | "auto";
@@ -81,6 +88,10 @@ export const DEFAULT_SETTINGS: JcodeSettings = {
   todoRunOnSave: false,
   tasksDashboardPath: DEFAULT_TASKS_DASHBOARD_PATH,
   tasksGlobalFilter: "",
+  dailyNoteBootstrapEnabled: true,
+  dailyNoteFolder: DEFAULT_DAILY_NOTE_FOLDER,
+  dailyNoteAutoFillNotification: true,
+  lastDailyBootstrapDate: "",
   autoTagEnabled: true,
   autoTagMode: "suggest",
   autoTagOnCreate: false,
@@ -408,6 +419,60 @@ export class JcodeSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.tasksGlobalFilter)
           .onChange(async (v) => {
             this.plugin.settings.tasksGlobalFilter = v.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    containerEl.createEl("h3", { text: "Daily note bootstrap" });
+    containerEl.createEl("p", {
+      text: "On the first Obsidian open of each day, create Daily Note/YYYY-MM-DD.md and optionally auto-fill Notification through the persistent /askjcode client using /gog-vinh.",
+    });
+    new Setting(containerEl)
+      .setName("Enable daily note bootstrap")
+      .setDesc("Runs once per day only, guarded by last bootstrap date.")
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.dailyNoteBootstrapEnabled)
+          .onChange(async (v) => {
+            this.plugin.settings.dailyNoteBootstrapEnabled = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+    new Setting(containerEl)
+      .setName("Daily note folder")
+      .setDesc("Vault-relative folder. File name is always YYYY-MM-DD.md.")
+      .addText((t) =>
+        t
+          .setPlaceholder(DEFAULT_DAILY_NOTE_FOLDER)
+          .setValue(this.plugin.settings.dailyNoteFolder)
+          .onChange(async (v) => {
+            this.plugin.settings.dailyNoteFolder =
+              v.trim() || DEFAULT_DAILY_NOTE_FOLDER;
+            await this.plugin.saveSettings();
+          }),
+      );
+    new Setting(containerEl)
+      .setName("Auto-fill Notification with /gog-vinh")
+      .setDesc(
+        "When the daily note is created for the first time today, ask the live jcode client to summarize today's calendars and recent important/unread mail across personal/work/study.",
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.dailyNoteAutoFillNotification)
+          .onChange(async (v) => {
+            this.plugin.settings.dailyNoteAutoFillNotification = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+    new Setting(containerEl)
+      .setName("Last daily bootstrap date")
+      .setDesc("Advanced guard. Clear to allow today's bootstrap to run again.")
+      .addText((t) =>
+        t
+          .setPlaceholder("YYYY-MM-DD")
+          .setValue(this.plugin.settings.lastDailyBootstrapDate)
+          .onChange(async (v) => {
+            this.plugin.settings.lastDailyBootstrapDate = v.trim();
             await this.plugin.saveSettings();
           }),
       );
