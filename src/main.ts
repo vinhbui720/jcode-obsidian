@@ -1,4 +1,7 @@
 import { Plugin, Notice, MarkdownView, TFile, type Editor } from "obsidian";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { ContextBroadcaster, ViewWithEditor } from "./context-broadcaster";
 import { DEFAULT_SETTINGS, JcodeSettings, JcodeSettingTab } from "./settings";
 import { createTransport, JcodeTransport } from "./jcode-client";
@@ -225,6 +228,7 @@ export default class JcodePlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		if (!Array.isArray(this.settings.knownSessions)) this.settings.knownSessions = [];
 		const resumeId = this.settings.resumeSessionId?.trim() ?? "";
+		if (resumeId) this.settings.activeSessionLabel = this.sessionDisplayName(resumeId) || normalizeSessionLabel(this.settings.activeSessionLabel || "");
 		const activeLabel = normalizeSessionLabel(this.settings.activeSessionLabel || "");
 		if (resumeId && activeLabel && !this.settings.knownSessions.some((s) => s.id === resumeId)) {
 			this.settings.knownSessions = upsertSavedSession(this.settings.knownSessions, {
@@ -274,6 +278,74 @@ export default class JcodePlugin extends Plugin {
 			);
 	}
 
+	getActiveClientName() {
+		return this.settings.resumeSessionId ? this.getClientDisplayLabel(this.settings.resumeSessionId, this.settings.activeSessionLabel) : "✨ New jcode client";
+	}
+
+	listResumeSessions() {
+		const byId = new Map<string, { id: string; label: string; lastUsedAt: string }>();
+		for (const session of this.settings.knownSessions) {
+			if (session.id?.trim()) byId.set(session.id.trim(), { ...session, label: session.label || this.sessionDisplayName(session.id) });
+		}
+		for (const session of this.discoverJcodeSessions()) {
+			if (!byId.has(session.id)) byId.set(session.id, session);
+		}
+		return [...byId.values()].sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt)).slice(0, 80);
+	}
+
+	private discoverJcodeSessions() {
+		const dir = path.join(os.homedir(), ".jcode", "sessions");
+		try {
+			return fs.readdirSync(dir)
+				.filter((name) => name.endsWith(".json"))
+				.map((name) => {
+					const file = path.join(dir, name);
+					try {
+						const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { id?: string; title?: string | null; short_name?: string; updated_at?: string; last_active_at?: string; created_at?: string };
+						const id = raw.id || name.replace(/\.json$/, "");
+						return {
+							id,
+							label: normalizeSessionLabel(raw.title || raw.short_name || this.sessionDisplayName(id) || id),
+							lastUsedAt: raw.updated_at || raw.last_active_at || raw.created_at || "",
+						};
+					} catch {
+						const id = name.replace(/\.json$/, "");
+						return { id, label: this.sessionDisplayName(id) || id, lastUsedAt: "" };
+					}
+				});
+		} catch {
+			return [];
+		}
+	}
+
+	getClientDisplayLabel(sessionId: string, label?: string) {
+		const name = this.sessionDisplayName(sessionId) || normalizeSessionLabel(label || "") || sessionId;
+		return `${this.sessionIcon(name)} ${name}`;
+	}
+
+	private sessionIcon(name: string) {
+		const key = name.toLowerCase();
+		const icons: Record<string, string> = {
+			ant: "🐜", bear: "🐻", beaver: "🦫", bee: "🐝", beetle: "🪲", bison: "🦬", buffalo: "🐃",
+			camel: "🐫", cat: "🐱", chicken: "🐔", cow: "🐄", crab: "🦀", cricket: "🦗", crocodile: "🐊",
+			deer: "🦌", dodo: "🦤", dove: "🕊️", duck: "🦆", eagle: "🦅", elephant: "🐘", falcon: "🦅",
+			fish: "🐟", frog: "🐸", giraffe: "🦒", goat: "🐐", goose: "🪿", hamster: "🐹", hawk: "🦅",
+			hedgehog: "🦔", hippo: "🦛", horse: "🐴", jaguar: "🐆", jellyfish: "🪼", kangaroo: "🦘",
+			koala: "🐨", ladybug: "🐞", lion: "🦁", llama: "🦙", lobster: "🦞", mosquito: "🦟", moth: "🦋",
+			octopus: "🐙", ox: "🐂", parrot: "🦜", peacock: "🦚", penguin: "🐧", pig: "🐷", "polar-bear": "🐻‍❄️",
+			ram: "🐏", rat: "🐀", scorpion: "🦂", shark: "🦈", sheep: "🐑", shrimp: "🦐", snake: "🐍",
+			spider: "🕷️", squid: "🦑", swan: "🦢", tiger: "🐯", turkey: "🦃", turtle: "🐢", unicorn: "🦄",
+			wolf: "🐺", worm: "🪱",
+		};
+		return icons[key] || "🤖";
+	}
+
+	private sessionDisplayName(sessionId: string) {
+		const match = /^session_([^_]+)_/.exec(sessionId.trim());
+		if (!match) return "";
+		return match[1].split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("-");
+	}
+
 	getActiveSessionLabel() {
 		return normalizeSessionLabel(this.settings.activeSessionLabel || "");
 	}
@@ -282,7 +354,7 @@ export default class JcodePlugin extends Plugin {
 		const id = this.settings.resumeSessionId.trim();
 		if (!id) return;
 		const saved = findSavedSessionLabel(this.settings.knownSessions, id);
-		if (saved) this.settings.activeSessionLabel = saved;
+		if (saved) this.settings.activeSessionLabel = this.sessionDisplayName(id) || saved;
 	}
 
 	async activateSavedSession(sessionId: string) {
@@ -290,7 +362,7 @@ export default class JcodePlugin extends Plugin {
 		if (!id) return;
 		const saved = this.settings.knownSessions.find((s) => s.id === id);
 		this.settings.resumeSessionId = id;
-		if (saved?.label) this.settings.activeSessionLabel = saved.label;
+		this.settings.activeSessionLabel = this.sessionDisplayName(id) || saved?.label || id;
 		await this.saveSettings();
 		this.transport?.setSessionId?.(id);
 		this.rebuildTransport();
@@ -305,7 +377,7 @@ export default class JcodePlugin extends Plugin {
 
 	private async recordActiveSession(sessionId: string, label: string) {
 		const cleanId = sessionId.trim();
-		const cleanLabel = normalizeSessionLabel(label);
+		const cleanLabel = this.sessionDisplayName(cleanId) || normalizeSessionLabel(label);
 		if (!cleanId || !cleanLabel) return;
 		this.settings.resumeSessionId = cleanId;
 		this.settings.activeSessionLabel = cleanLabel;

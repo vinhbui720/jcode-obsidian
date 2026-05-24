@@ -197,13 +197,13 @@ export class JcodeSettingTab extends PluginSettingTab {
 			);
 
 			new Setting(containerEl)
-				.setName("Active jcode section")
+				.setName("Active Obsidian jcode client")
 				.setDesc(
-					"The natural title used by /askjcode. This stays active across Obsidian restarts until you switch to another saved session or start a new one."
+					`Live client used by /askjcode while Obsidian is open: ${this.plugin.getActiveClientName()}. Rename only changes the display title, not the underlying jcode session id.`
 				)
 				.addText((t) =>
 					t
-						.setPlaceholder("Use current note section on first ask")
+						.setPlaceholder("Display title, e.g. Obsidian")
 						.setValue(this.plugin.settings.activeSessionLabel)
 						.onChange(async (v) => {
 							this.plugin.settings.activeSessionLabel = v;
@@ -211,25 +211,25 @@ export class JcodeSettingTab extends PluginSettingTab {
 						})
 				)
 				.addButton((b) =>
-					b.setButtonText("Start new")
-						.setTooltip("Clear current resume session and start a fresh conversation section")
+					b.setButtonText("Start new client")
+						.setTooltip("Clear current resume session and start a fresh Obsidian jcode client")
 						.onClick(async () => {
 							await this.plugin.startNewSessionFromSettings();
 							this.display();
 						})
 				);
 
-			const savedSessions = this.plugin.settings.knownSessions;
+			const savedSessions = this.plugin.listResumeSessions();
 			new Setting(containerEl)
-				.setName("Resume saved jcode section")
+				.setName("Resume jcode client")
 				.setDesc(
-					"Choose one of your previously used jcode sessions. This becomes the active section and will be resumed by /askjcode next time too."
+					"Choose any local jcode session to become Obsidian's live /askjcode client. Names are derived from session ids, e.g. session_penguin_... → Penguin."
 				)
 				.addDropdown((dd) => {
-					dd.addOption("__new__", "Start new section");
+					dd.addOption("__new__", "✨ Start new client");
 					for (const session of savedSessions) {
-						const suffix = session.id === this.plugin.settings.resumeSessionId ? " (active)" : "";
-						dd.addOption(session.id, `${session.label}${suffix}`);
+						const suffix = session.id === this.plugin.settings.resumeSessionId ? "  • active" : "";
+						dd.addOption(session.id, `${this.plugin.getClientDisplayLabel(session.id, session.label)}${suffix}`);
 					}
 					dd.setValue(this.plugin.settings.resumeSessionId || "__new__").onChange(async (v) => {
 						if (v === "__new__") await this.plugin.startNewSessionFromSettings();
