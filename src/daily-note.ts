@@ -20,7 +20,13 @@ export function dailyNotePath(
 export function renderDailyNoteTemplate(opts: DailyNoteTemplateOptions) {
   const notification =
     opts.notificationPlaceholder?.trim() ||
-    "_Jcode daily briefing is queued..._";
+    `### Calendar
+
+_Jcode will fill today's personal/work/study calendar here._
+
+### Mail
+
+_Jcode will fill nearest important/unread personal/work/study mail here._`;
   const globalFilter = opts.tasksGlobalFilter?.trim();
   const filterLine = globalFilter ? `${globalFilter}\n` : "";
 
@@ -96,5 +102,5 @@ function escapeRegExp(value: string) {
 }
 
 export function formatDailyBriefingPrompt(date: string, notePath: string) {
-  return `Using /gog-vinh, create my Obsidian daily briefing for ${date} and write it directly into ${notePath}. Do not print the full briefing as your final answer. Read ${notePath}, replace only the content between <!-- jcode-daily-notification:start --> and <!-- jcode-daily-notification:end --> with clean Vietnamese Markdown. Check Google Calendar for personal, work, and study accounts for today. Merge all events into one chronological list by time. Then check the nearest/recent important or unread emails across personal, work, and study accounts. Use two subsections: ### Calendar and ### Mail. Do not send, delete, archive, or modify any email/calendar item. Do not commit git changes. Final answer should only say that the daily briefing was updated, or report an error.`;
+  return `/gog-vinh update ${notePath} for ${date}. Replace only the jcode-daily-notification block. Keep exactly two subsections: ### Calendar with today's personal/work/study events sorted by time, and ### Mail with nearest important/unread personal/work/study mail. Do not print the full briefing. Do not modify mail/calendar. Do not commit.`;
 }

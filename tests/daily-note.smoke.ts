@@ -20,6 +20,8 @@ const note = renderDailyNoteTemplate({
 assert.match(note, /tags:\n  - daily-note/);
 assert.match(note, /date: 2026-05-24/);
 assert.match(note, /## Notification/);
+assert.match(note, /### Calendar/);
+assert.match(note, /### Mail/);
 assert.match(note, /## Task/);
 assert.match(note, /### Overdue/);
 assert.match(note, /due before today/);
@@ -37,9 +39,10 @@ assert.equal((filled.match(/### Calendar/g) ?? []).length, 1);
 const prompt = formatDailyBriefingPrompt("2026-05-24", "Daily Note/2026-05-24.md");
 assert.match(prompt, /\/gog-vinh/);
 assert.match(prompt, /Daily Note\/2026-05-24\.md/);
-assert.match(prompt, /personal, work, and study/);
-assert.match(prompt, /Do not print the full briefing as your final answer/);
-assert.match(prompt, /Do not commit git changes/);
-assert.match(prompt, /Do not send, delete, archive, or modify any email\/calendar item/);
+assert.match(prompt, /personal\/work\/study/);
+assert.match(prompt, /Replace only the jcode-daily-notification block/);
+assert.match(prompt, /Do not print the full briefing/);
+assert.match(prompt, /Do not commit/);
+assert.match(prompt, /Do not modify mail\/calendar/);
 
 console.log("PASS daily-note");
