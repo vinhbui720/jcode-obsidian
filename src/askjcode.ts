@@ -77,6 +77,12 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	let errored = false;
 	const liveState = createLiveState("thinking…");
 	const runState = createRunState();
+	let activeEntryId: string | null = null;
+	let monitorTimer: ReturnType<typeof setInterval> | null = null;
+	const monitor = () => {
+		liveState.stuckLine = buildStuckLine(liveState, Date.now());
+		updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
+	};
 
 	const onEvent = (e: JcodeEvent) => {
 		switch (e.type) {
@@ -94,7 +100,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 				if (statusBarStreaming) deps.statusBar.setText(`jcode: ${e.detail}`);
 				if (shouldPersistStatusAsProse(e.detail)) pushProseLine(runState, e.detail);
 				if (shouldShowLiveStatus(e.detail)) {
-					liveState.toolLine = cleanFeedbackLine(e.detail);
+					liveState.introLine = cleanFeedbackLine(e.detail);
 					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 				}
 				break;
@@ -109,20 +115,36 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 						`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
 					);
 				}
-				if (e.status === "start") flushCurrentProse(runState);
-				liveState.toolLine = formatToolLine(e);
+				if (e.status === "start") {
+					flushCurrentProse(runState);
+					activeEntryId = upsertTimelineEntry(liveState, activeEntryId, formatToolLine(e), "running", Date.now());
+					if (!monitorTimer) monitorTimer = setInterval(monitor, 1500);
+				} else {
+					activeEntryId = finalizeTimelineEntry(liveState, activeEntryId, formatToolLine(e), e.status === "end" ? "done" : "error", Date.now());
+					liveState.stuckLine = buildStuckLine(liveState, Date.now());
+				}
 				updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 				break;
 			case "end":
 				flushCurrentProse(runState);
 				if (e.text) accumulated = e.text;
+				if (monitorTimer) {
+					clearInterval(monitorTimer);
+					monitorTimer = null;
+				}
+				liveState.stuckLine = "";
 				deps.statusBar.setText("jcode: done");
 				break;
 			case "error":
 				errored = true;
 				flushCurrentProse(runState);
+				if (monitorTimer) {
+					clearInterval(monitorTimer);
+					monitorTimer = null;
+				}
 				deps.statusBar.setText(`jcode: error`);
-				liveState.toolLine = cleanFeedbackLine(e.message);
+				activeEntryId = finalizeTimelineEntry(liveState, activeEntryId, cleanFeedbackLine(e.message), "error", Date.now());
+				liveState.stuckLine = "";
 				updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 				break;
 		}
@@ -141,8 +163,9 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 		errored = true;
 		accumulated =
 			accumulated ||
-			`jcode error: ${err instanceof Error ? err.message : String(err)}`;
+				`jcode error: ${err instanceof Error ? err.message : String(err)}`;
 	}
+	if (monitorTimer) clearInterval(monitorTimer);
 
 	replaceLiveStatusWithCallout(ctx.editor, liveBlock, title, accumulated, errored, runState);
 
@@ -235,7 +258,16 @@ interface LiveBlock {
 }
 
 interface LiveState {
-	toolLine: string;
+	introLine: string;
+	timeline: LiveTimelineEntry[];
+	stuckLine: string;
+}
+
+interface LiveTimelineEntry {
+	id: string;
+	text: string;
+	status: "running" | "done" | "error";
+	startedAtMs: number;
 }
 
 interface RunState {
@@ -250,7 +282,7 @@ function insertLiveStatus(
 	status: string
 ): LiveBlock {
 	const insertAtLine = triggerLine + 1;
-	const block = renderLiveBlock(title, { toolLine: status });
+	const block = renderLiveBlock(title, { introLine: status, timeline: [], stuckLine: "" });
 	editor.replaceRange(block, { line: insertAtLine, ch: 0 }, { line: insertAtLine, ch: 0 });
 	return { startLine: insertAtLine, lineCount: block.split("\n").length - 1 };
 }
@@ -309,16 +341,66 @@ function renderStatusBlock(title: string, status: string): string {
 
 function renderLiveBlock(title: string, state: LiveState): string {
 	const lines = [`> [!jcode]+ ${title}`];
-	if (state.toolLine.trim()) lines.push(`> - ${state.toolLine.trim()}`);
+	if (state.introLine.trim()) lines.push(`> - ${state.introLine.trim()}`);
+	for (const entry of state.timeline) lines.push(`> - ${entry.text}`);
+	if (state.stuckLine.trim()) lines.push(`> - ${state.stuckLine.trim()}`);
 	return `${lines.join("\n")}\n`;
 }
 
 function createLiveState(toolLine: string): LiveState {
-	return { toolLine };
+	return { introLine: toolLine, timeline: [], stuckLine: "" };
 }
 
 function createRunState(): RunState {
 	return { proseSegments: [], currentProseLines: [] };
+}
+
+function upsertTimelineEntry(
+	state: LiveState,
+	activeEntryId: string | null,
+	text: string,
+	status: "running" | "done" | "error",
+	nowMs: number
+): string {
+	if (activeEntryId) {
+		const entry = state.timeline.find((x) => x.id === activeEntryId);
+		if (entry) {
+			entry.text = text;
+			entry.status = status;
+			return activeEntryId;
+		}
+	}
+	const id = `tool-${nowMs}-${state.timeline.length}`;
+	state.timeline.push({ id, text, status, startedAtMs: nowMs });
+	return id;
+}
+
+function finalizeTimelineEntry(
+	state: LiveState,
+	activeEntryId: string | null,
+	text: string,
+	status: "done" | "error",
+	nowMs: number
+): string | null {
+	if (!activeEntryId) {
+		const id = `tool-${nowMs}-${state.timeline.length}`;
+		state.timeline.push({ id, text, status, startedAtMs: nowMs });
+		return null;
+	}
+	const entry = state.timeline.find((x) => x.id === activeEntryId);
+	if (entry) {
+		entry.text = text;
+		entry.status = status;
+	}
+	return null;
+}
+
+function buildStuckLine(state: LiveState, nowMs: number): string {
+	const active = [...state.timeline].reverse().find((x) => x.status === "running");
+	if (!active) return "";
+	const elapsed = nowMs - active.startedAtMs;
+	if (elapsed < 12_000) return "";
+	return `Có vẻ đang chờ hơi lâu: ${active.text}`;
 }
 
 function formatToolLine(e: Extract<JcodeEvent, { type: "tool" }>): string {
@@ -519,4 +601,7 @@ export const _internals = {
 	cleanFeedbackSummary,
 	shouldPersistStatusAsProse,
 	buildStructuredResult,
+	upsertTimelineEntry,
+	finalizeTimelineEntry,
+	buildStuckLine,
 };

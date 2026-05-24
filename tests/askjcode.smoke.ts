@@ -296,8 +296,13 @@ function testSectionInternals() {
 	const e = new FakeEditor("# Top\ntext\n## Child ##\n/askjcode hi");
 	eq(_internals.findSectionTitle(e as never, 3), "Child", "section title strips trailing hashes");
 	eq(_internals.renderStatusBlock("Child", "connecting…"), "> [!jcode]+ Child\n> - connecting…\n", "status block render");
-	const live = _internals.renderLiveBlock("Child", { toolLine: "Đang dùng bash..." });
-	eq(live.includes("> - Đang dùng bash..."), true, "live block includes tool line");
+	const live = _internals.renderLiveBlock("Child", {
+		introLine: "Đang xử lý...",
+		timeline: [{ id: "1", text: "Đang dùng bash để kiểm tra lịch.", status: "running", startedAtMs: 0 }],
+		stuckLine: "",
+	});
+	eq(live.includes("> - Đang xử lý..."), true, "live block includes intro line");
+	eq(live.includes("> - Đang dùng bash để kiểm tra lịch."), true, "live block includes tool timeline line");
 	eq(_internals.activityKey("  A   Status  "), "a status", "activity key normalizes whitespace");
 	eq(_internals.shouldShowLiveStatus("opening websocket"), false, "live status hides websocket noise");
 	eq(_internals.shouldShowLiveStatus("persistent jcode client running: session_x"), false, "live status hides session noise");
@@ -306,6 +311,12 @@ function testSectionInternals() {
 	eq(_internals.cleanFeedbackSummary("[skill_manage] tool: bash."), "bash", "clean feedback summary");
 	eq(_internals.formatToolLine({ type: "tool", name: "bash", status: "start", summary: "gtk-launch" }), "Đang dùng bash để gtk-launch.", "format tool line start");
 	eq(_internals.formatToolLine({ type: "tool", name: "bash", status: "end", summary: "gtk-launch" }), "bash xong: gtk-launch.", "format tool line end");
+	const timelineState = { introLine: "thinking…", timeline: [], stuckLine: "" };
+	const activeId = _internals.upsertTimelineEntry(timelineState, null, "Đang dùng bash để kiểm tra lịch.", "running", 1000);
+	eq(timelineState.timeline.length, 1, "timeline entry added");
+	eq(_internals.buildStuckLine(timelineState, 14000).includes("Có vẻ đang chờ hơi lâu"), true, "stuck line appears after threshold");
+	_internals.finalizeTimelineEntry(timelineState, activeId, "bash xong: kiểm tra lịch.", "done", 15000);
+	eq(_internals.buildStuckLine(timelineState, 30000), "", "stuck line clears when no running entry");
 	eq(
 		_internals.splitFinalAssistantText("I’m launching it now.\n✓ batch · Launch app\n  ✓ bash · run\n41s · 78.4 tps · ↑77k ↓76"),
 		{ feedbacks: [], answer: "I’m launching it now." },
