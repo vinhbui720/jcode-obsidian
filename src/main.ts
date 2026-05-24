@@ -224,6 +224,16 @@ export default class JcodePlugin extends Plugin {
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		if (!Array.isArray(this.settings.knownSessions)) this.settings.knownSessions = [];
+		const resumeId = this.settings.resumeSessionId?.trim() ?? "";
+		const activeLabel = normalizeSessionLabel(this.settings.activeSessionLabel || "");
+		if (resumeId && activeLabel && !this.settings.knownSessions.some((s) => s.id === resumeId)) {
+			this.settings.knownSessions = upsertSavedSession(this.settings.knownSessions, {
+				id: resumeId,
+				label: activeLabel,
+				lastUsedAt: new Date().toISOString(),
+			});
+			await this.saveData(this.settings);
+		}
 	}
 
 	async saveSettings() {

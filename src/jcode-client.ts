@@ -185,7 +185,7 @@ class ReplTransport implements JcodeTransport {
 	start(opts: { cwd?: string; provider?: string; resumeSessionId?: string }, onEvent?: (e: JcodeEvent) => void) {
 		this.cwd = opts.cwd ?? this.cwd;
 		this.provider = opts.provider ?? this.provider;
-		if (opts.resumeSessionId) this.sessionId = opts.resumeSessionId;
+		if (opts.resumeSessionId !== undefined) this.sessionId = opts.resumeSessionId;
 		if (this.sessionId) this.ensureRepl(onEvent);
 	}
 
@@ -201,7 +201,7 @@ class ReplTransport implements JcodeTransport {
 	async ask(opts: AskOptions, onEvent: (e: JcodeEvent) => void): Promise<JcodeEvent> {
 		this.cwd = opts.cwd ?? this.cwd;
 		this.provider = opts.provider ?? this.provider;
-		if (opts.resumeSessionId) this.sessionId = opts.resumeSessionId;
+		if (opts.resumeSessionId !== undefined) this.sessionId = opts.resumeSessionId;
 		if (!this.sessionId) {
 			// First prompt must create a real jcode session. After it completes, keep a
 			// REPL alive for subsequent prompts, matching jcode-panel's architecture.
