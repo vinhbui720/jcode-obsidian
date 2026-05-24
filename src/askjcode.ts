@@ -540,7 +540,7 @@ function splitFinalAssistantText(raw: string): { feedbacks: string[]; answer: st
 			flushProse();
 			continue;
 		}
-		currentProse.push(trimmed);
+		currentProse.push(sanitizeAssistantLine(trimmed));
 	}
 	flushProse();
 	if (proseSegments.length === 0) return { feedbacks: [], answer: "" };
@@ -559,6 +559,9 @@ function isToolTreeLine(trimmed: string): boolean {
 	if (/^→?\s*---\s*\[\d+\]/.test(trimmed)) return true;
 	if (/^→\s*$/.test(trimmed)) return true;
 	if (/^ERROR:\s+unknown account alias/i.test(trimmed)) return true;
+	if (/^jq:\s+error:/i.test(trimmed)) return true;
+	if (/^(?:import\s+json|from\s+\w+\s+import\s+|cmd\s*=|subprocess\.)/i.test(trimmed)) return true;
+	if (/^→\s*(?:jq:\s+error:|import\s+json|cmd\s*=)/i.test(trimmed)) return true;
 	if (/^[┌└│├─]/.test(trimmed)) return true;
 	if (/^[✓✗]\s+/.test(trimmed)) return true;
 	if (/^[│└├].*[✓✗]/.test(trimmed)) return true;
@@ -601,7 +604,16 @@ function pushProseLine(state: RunState, line: string) {
 	const trimmed = cleanFeedbackLine(line);
 	if (!trimmed) return;
 	if (isToolTreeLine(trimmed) || isMetricsLine(trimmed)) return;
-	state.currentProseLines.push(trimmed);
+	state.currentProseLines.push(sanitizeAssistantLine(trimmed));
+}
+
+function sanitizeAssistantLine(line: string): string {
+	let text = cleanFeedbackLine(line).replace(/^→\s*/, "");
+	// Terminal REPL output can concatenate a leftover URL/error prefix with the
+	// real final answer on one visual line. Keep the user-facing labelled URL.
+	const labelledUrl = /\b(?:Meet link|Calendar event):\s*https?:\/\//i.exec(text);
+	if (labelledUrl && labelledUrl.index > 0) text = text.slice(labelledUrl.index);
+	return text;
 }
 
 function flushCurrentProse(state: RunState, bucket: "prose" | "feedback" = "prose") {
@@ -677,6 +689,11 @@ function normalizeProseBlock(lines: string[]): string {
 			continue;
 		}
 		if (/^(?:[•*-]|\d+[.)])\s+/.test(line)) {
+			flushParagraph();
+			pieces.push(line);
+			continue;
+		}
+		if (/^(?:Meet link|Calendar event):\s*https?:\/\//i.test(line) || /^https?:\/\//i.test(line)) {
 			flushParagraph();
 			pieces.push(line);
 			continue;

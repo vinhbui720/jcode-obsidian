@@ -390,6 +390,20 @@ a recovery directive was pending.
 	const parsedStudyMail = _internals.splitFinalAssistantText(studyMailRaw);
 	eq(parsedStudyMail.feedbacks, [], "split final study mail has no separate final feedback when no answer follows tools");
 	eq(parsedStudyMail.answer, "Đang check mail tài khoản study cho tuần sau. Đã thấy email quan trọng. Mình check thêm keyword ngày tuần sau để không sót deadline/sự kiện.", "split final study mail keeps useful prose as fallback answer");
+
+	const meetingLinkRaw = `Using /gog-vinh calendar data to fetch the work meeting link.
+[jq] $ broken command
+jq: error: syntax error, unexpected INVALID_CHARACTER (Unix shell quoting issues?) at <top-level>, line 1:
+import json, subprocess cmd = [ 'gog','calendar' ]
+→ https://meet.google.com/viq-dfpo-cbn Meet link: https://meet.google.com/viq-dfpo-cbn
+Calendar event: https://www.google.com/calendar/event?eid=abc123`;
+	const parsedMeetingLink = _internals.splitFinalAssistantText(meetingLinkRaw);
+	eq(parsedMeetingLink.feedbacks, ["Using /gog-vinh calendar data to fetch the work meeting link."], "split final meeting link keeps first prose as feedback");
+	eq(
+		parsedMeetingLink.answer,
+		"Meet link: https://meet.google.com/viq-dfpo-cbn\nCalendar event: https://www.google.com/calendar/event?eid=abc123",
+		"split final meeting link strips jq chatter and preserves URL lines"
+	);
 }
 
 (async () => {
