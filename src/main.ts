@@ -501,10 +501,16 @@ export default class JcodePlugin extends Plugin {
 	private resolveDisplayTitleFromPrompt(prompt: string, vaultRoot: string) {
 		const hit = this.findLatestSession({ prompt }) || this.findLatestSession({ cwd: vaultRoot, prompt });
 		if (!hit) return null;
+		const previousId = this.settings.resumeSessionId;
+		const previousLabel = previousId ? this.getClientDisplayLabel(previousId, this.settings.activeSessionLabel) : "saved section";
+		const nextLabel = this.getClientDisplayLabel(hit.id, hit.label);
 		if (hit.id !== this.settings.resumeSessionId) {
 			void this.recordActiveSession(hit.id, hit.label);
 		}
-		return this.getClientDisplayLabel(hit.id, hit.label);
+		return {
+			title: nextLabel,
+			notice: hit.id !== previousId ? `Jcode switched section: ${previousLabel} → ${nextLabel}` : undefined,
+		};
 	}
 
 	private renameAdjacentJcodeCallout(editor: Editor, triggerLine: number, label: string) {

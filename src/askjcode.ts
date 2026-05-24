@@ -42,7 +42,7 @@ export interface AskJcodeDeps {
 	saveSessionId?: (id: string) => void;
 	provider?: string;
 	displayTitle?: string;
-	resolveDisplayTitle?: () => string | null | Promise<string | null>;
+	resolveDisplayTitle?: () => string | { title: string; notice?: string } | null | Promise<string | { title: string; notice?: string } | null>;
 }
 
 const PREFIX = "/askjcode";
@@ -81,10 +81,21 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	const runState = createRunState();
 	let activeEntryId: string | null = null;
 	let monitorTimer: ReturnType<typeof setInterval> | null = null;
+	let lastTitleNotice = "";
 	const maybeRefreshTitle = async () => {
-		const resolved = (await deps.resolveDisplayTitle?.())?.trim();
-		if (!resolved || resolved === title) return;
-		title = resolved;
+		const resolvedRaw = await deps.resolveDisplayTitle?.();
+		const resolved = typeof resolvedRaw === "string" ? { title: resolvedRaw } : resolvedRaw;
+		if (!resolved) return;
+		const nextTitle = resolved?.title?.trim();
+		if (!nextTitle) return;
+		if (resolved.notice && resolved.notice !== lastTitleNotice) {
+			lastTitleNotice = resolved.notice;
+			liveState.introLine = resolved.notice;
+			pushProseLine(runState, resolved.notice);
+			flushCurrentProse(runState, "feedback");
+		}
+		if (nextTitle === title) return;
+		title = nextTitle;
 		updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 	};
 	const monitor = () => {
