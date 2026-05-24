@@ -258,15 +258,16 @@ class ReplTransport implements JcodeTransport {
 	private handleOutput(chunk: string, fallbackOnEvent?: (e: JcodeEvent) => void) {
 		for (const rawLine of chunk.split(/\r?\n/)) {
 			const line = rawLine.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").trim();
-			if (!line || line === ">" || line.startsWith("J-Code -") || line.startsWith("Type your message") || line.startsWith("Available skills:")) continue;
 			const pending = this.pending;
-			const onEvent = pending?.onEvent ?? fallbackOnEvent;
-			if (!onEvent) continue;
-			if (pending) this.markReplFeedback(pending);
-			if (line.startsWith("[Tokens]")) {
-				if (pending) this.finishPendingRepl(pending, onEvent);
+			if (line === ">") {
+				if (pending && pending.seenFeedback) this.finishPendingRepl(pending, pending.onEvent);
 				continue;
 			}
+			if (!line || line.startsWith("J-Code -") || line.startsWith("Type your message") || line.startsWith("Available skills:")) continue;
+			const onEvent = pending?.onEvent ?? fallbackOnEvent;
+			if (!onEvent) continue;
+			if (line.startsWith("[Tokens]") || isReplNoiseLine(line)) continue;
+			if (pending) this.markReplFeedback(pending);
 			const norm = tryNormaliseJsonLine(line);
 			if (norm) {
 				onEvent(norm);
@@ -275,7 +276,7 @@ class ReplTransport implements JcodeTransport {
 			}
 			const text = normaliseReplTextLine(line, pending?.text ?? "");
 			if (!text) continue;
-				const e: JcodeEvent = { type: "delta", text: text + "\n" };
+			const e: JcodeEvent = { type: "delta", text: text + "\n" };
 			if (pending) pending.text += e.text;
 			onEvent(e);
 		}
@@ -315,6 +316,13 @@ function normaliseReplTextLine(line: string, previous: string): string {
 	if (!text) return "";
 	if (!previous || /\s$/.test(previous) || /^[,.;:!?)]/.test(text)) return text;
 	return " " + text;
+}
+
+function isReplNoiseLine(line: string): boolean {
+	const s = line.replace(/\s+/g, " ").trim().toLowerCase();
+	return s === "reload complete — continuing because a recovery directive was pending." ||
+		s === "reload complete - continuing because a recovery directive was pending." ||
+		s === "a recovery directive was pending.";
 }
 
 function replWirePrompt(prompt: string): string {
