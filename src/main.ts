@@ -1032,16 +1032,15 @@ export default class JcodePlugin extends Plugin {
     const adapter = this.app.vault.adapter as unknown as { basePath?: string };
     const vaultRoot = adapter.basePath ?? "";
     this.currentRequestActive = true;
-    this.statusBarItem?.setText("jcode: daily briefing running");
+    this.statusBarItem?.setText("jcode: daily briefing assigned");
     await this.replaceDailyNotificationInFile(
       file,
       `_Running daily briefing with ${this.getActiveClientName()}..._`,
     );
 
-    let text = "";
     try {
-      const prompt = formatDailyBriefingPrompt(date);
-      const result = await this.transport.ask(
+      const prompt = formatDailyBriefingPrompt(date, file.path);
+      await this.transport.ask(
         {
           message: prompt,
           cwd: vaultRoot || undefined,
@@ -1058,17 +1057,15 @@ export default class JcodePlugin extends Plugin {
               this.getActiveSessionLabel(),
             );
           }
-          if (event.type === "delta") text += event.text;
-          if (event.type === "error") text += `\n_Error: ${event.message}_\n`;
+          if (event.type === "error")
+            void this.replaceDailyNotificationInFile(
+              file,
+              `_Daily briefing failed: ${event.message}_`,
+            );
         },
       );
-      const finalText = result.type === "end" ? result.text || text : text;
       await this.syncActiveSessionFromPrompt(prompt, vaultRoot);
-      await this.replaceDailyNotificationInFile(
-        file,
-        finalText.trim() || "_Daily briefing returned no text._",
-      );
-      new Notice(`jcode: daily briefing filled → ${file.path}`);
+      new Notice(`jcode: daily briefing assigned → ${file.path}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.replaceDailyNotificationInFile(

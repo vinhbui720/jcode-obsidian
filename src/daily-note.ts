@@ -95,6 +95,6 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function formatDailyBriefingPrompt(date: string) {
-  return `Using /gog-vinh, create my Obsidian daily briefing for ${date}. Check Google Calendar for personal, work, and study accounts for today. Merge all events into one chronological list by time. Then check the nearest/recent important or unread emails across personal, work, and study accounts. Output concise Vietnamese Markdown with two sections: Calendar and Mail. Do not send, delete, archive, or modify anything.`;
+export function formatDailyBriefingPrompt(date: string, notePath: string) {
+  return `Using /gog-vinh, create my Obsidian daily briefing for ${date} and write it directly into ${notePath}. Do not print the full briefing as your final answer. Read ${notePath}, replace only the content between <!-- jcode-daily-notification:start --> and <!-- jcode-daily-notification:end --> with clean Vietnamese Markdown. Check Google Calendar for personal, work, and study accounts for today. Merge all events into one chronological list by time. Then check the nearest/recent important or unread emails across personal, work, and study accounts. Use two subsections: ### Calendar and ### Mail. Do not send, delete, archive, or modify any email/calendar item. Do not commit git changes. Final answer should only say that the daily briefing was updated, or report an error.`;
 }

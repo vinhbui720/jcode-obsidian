@@ -34,9 +34,12 @@ const filled = replaceDailyNotification(note, "### Calendar\n- 09:00 Standup");
 assert.match(filled, /<!-- jcode-daily-notification:start -->\n### Calendar\n- 09:00 Standup\n<!-- jcode-daily-notification:end -->/);
 assert.equal((filled.match(/### Calendar/g) ?? []).length, 1);
 
-const prompt = formatDailyBriefingPrompt("2026-05-24");
+const prompt = formatDailyBriefingPrompt("2026-05-24", "Daily Note/2026-05-24.md");
 assert.match(prompt, /\/gog-vinh/);
+assert.match(prompt, /Daily Note\/2026-05-24\.md/);
 assert.match(prompt, /personal, work, and study/);
-assert.match(prompt, /Do not send, delete, archive, or modify anything/);
+assert.match(prompt, /Do not print the full briefing as your final answer/);
+assert.match(prompt, /Do not commit git changes/);
+assert.match(prompt, /Do not send, delete, archive, or modify any email\/calendar item/);
 
 console.log("PASS daily-note");
