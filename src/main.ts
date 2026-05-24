@@ -434,9 +434,11 @@ export default class JcodePlugin extends Plugin {
 			const activeLabel =
 				normalizeSessionLabel(this.settings.activeSessionLabel || "") ||
 				deriveInitialSessionLabel(this.findCurrentHeading(editor), file?.basename ?? null);
-			const displayLabel = this.settings.resumeSessionId
-				? this.getClientDisplayLabel(this.settings.resumeSessionId, activeLabel)
-				: `${this.sessionIcon(activeLabel)} ${activeLabel}`;
+			// The saved setting can lag behind jcode recovery/resume. Avoid showing a
+			// wrong animal (for example Hawk) before the prompt is written to the real
+			// active session (for example Moose). The live title resolver below renames
+			// this neutral title as soon as it can identify the true session.
+			const displayLabel = "⏳ Jcode";
 			if (!normalizeSessionLabel(this.settings.activeSessionLabel || "")) {
 				this.settings.activeSessionLabel = activeLabel;
 				await this.saveSettings();
@@ -463,6 +465,7 @@ export default class JcodePlugin extends Plugin {
 					resumeSessionId: this.settings.resumeSessionId || undefined,
 					provider: this.settings.provider || undefined,
 					saveSessionId: (id) => void this.recordActiveSession(id, activeLabel),
+					resolveDisplayTitle: () => this.resolveDisplayTitleFromPrompt(trigger.prompt, vaultRoot),
 				}
 			);
 			const synced = inserted ? await this.syncActiveSessionFromPrompt(trigger.prompt, vaultRoot) : null;
@@ -493,6 +496,15 @@ export default class JcodePlugin extends Plugin {
 		await this.recordActiveSession(hit.id, hit.label);
 		this.statusBarItem?.setText(`jcode: active client → ${this.getClientDisplayLabel(hit.id, hit.label)}`);
 		return hit;
+	}
+
+	private resolveDisplayTitleFromPrompt(prompt: string, vaultRoot: string) {
+		const hit = this.findLatestSession({ prompt }) || this.findLatestSession({ cwd: vaultRoot, prompt });
+		if (!hit) return null;
+		if (hit.id !== this.settings.resumeSessionId) {
+			void this.recordActiveSession(hit.id, hit.label);
+		}
+		return this.getClientDisplayLabel(hit.id, hit.label);
 	}
 
 	private renameAdjacentJcodeCallout(editor: Editor, triggerLine: number, label: string) {

@@ -42,6 +42,7 @@ export interface AskJcodeDeps {
 	saveSessionId?: (id: string) => void;
 	provider?: string;
 	displayTitle?: string;
+	resolveDisplayTitle?: () => string | null | Promise<string | null>;
 }
 
 const PREFIX = "/askjcode";
@@ -57,7 +58,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	}
 
 	const { line, prompt, flags } = trigger;
-	const title = deps.displayTitle?.trim() || findSectionTitle(ctx.editor, line) || "Conversation";
+	let title = deps.displayTitle?.trim() || findSectionTitle(ctx.editor, line) || "Conversation";
 
 	if (flags.has("notebooklm")) {
 		notify("jcode: --notebooklm route lands in M5. Use plain /askjcode for now.");
@@ -80,10 +81,18 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	const runState = createRunState();
 	let activeEntryId: string | null = null;
 	let monitorTimer: ReturnType<typeof setInterval> | null = null;
+	const maybeRefreshTitle = async () => {
+		const resolved = (await deps.resolveDisplayTitle?.())?.trim();
+		if (!resolved || resolved === title) return;
+		title = resolved;
+		updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
+	};
 	const monitor = () => {
+		void maybeRefreshTitle();
 		liveState.stuckLine = buildStuckLine(liveState, Date.now());
 		updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 	};
+	monitorTimer = setInterval(monitor, 1500);
 
 	const onEvent = (e: JcodeEvent) => {
 		switch (e.type) {
@@ -97,7 +106,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 				}
 				updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 				break;
-			case "status":
+		case "status":
 				if (statusBarStreaming) deps.statusBar.setText(`jcode: ${e.detail}`);
 				if (shouldPersistStatusAsProse(e.detail)) {
 					pushProseLine(runState, e.detail);
@@ -105,6 +114,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 				}
 				if (shouldShowLiveStatus(e.detail)) {
 					liveState.introLine = cleanFeedbackLine(e.detail);
+					void maybeRefreshTitle();
 					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 				}
 				break;
@@ -124,7 +134,6 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 				}
 				if (e.status === "start") {
 					activeEntryId = upsertTimelineEntry(liveState, activeEntryId, formatToolLine(e), "running", Date.now());
-					if (!monitorTimer) monitorTimer = setInterval(monitor, 1500);
 				} else {
 					activeEntryId = finalizeTimelineEntry(liveState, activeEntryId, formatToolLine(e), e.status === "end" ? "done" : "error", Date.now());
 					liveState.stuckLine = buildStuckLine(liveState, Date.now());
@@ -422,8 +431,8 @@ function finalizeTimelineEntry(
 
 function buildStuckLine(state: LiveState, nowMs: number): string {
 	const active = [...state.timeline].reverse().find((x) => x.status === "running");
-	if (!active) return "";
-	const elapsed = nowMs - active.startedAtMs;
+	const elapsed = nowMs - (active?.startedAtMs ?? 0);
+	if (!active) return "Đang chờ Jcode stream feedback…";
 	if (elapsed < 12_000) return "";
 	return `Có vẻ đang chờ hơi lâu: ${active.text}`;
 }

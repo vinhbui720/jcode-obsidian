@@ -342,7 +342,7 @@ function testSectionInternals() {
 	eq(timelineState.timeline.length, 1, "timeline entry added");
 	eq(_internals.buildStuckLine(timelineState, 14000).includes("Có vẻ đang chờ hơi lâu"), true, "stuck line appears after threshold");
 	_internals.finalizeTimelineEntry(timelineState, activeId, "bash xong: kiểm tra lịch.", "done", 15000);
-	eq(_internals.buildStuckLine(timelineState, 30000), "", "stuck line clears when no running entry");
+	eq(_internals.buildStuckLine(timelineState, 30000), "Đang chờ Jcode stream feedback…", "stuck line shows waiting state when no running entry");
 	let rawActive: string | null = null;
 	const rawLive = { introLine: "thinking…", timeline: [], stuckLine: "" };
 	rawActive = _internals.absorbDeltaIntoLiveState(rawLive, rawActive, "Đang check mail tài khoản study cho tuần sau.\n", 1000);
