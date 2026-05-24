@@ -463,7 +463,8 @@ export default class JcodePlugin extends Plugin {
 					saveSessionId: (id) => void this.recordActiveSession(id, activeLabel),
 				}
 			);
-			if (inserted) await this.syncActiveSessionFromPrompt(trigger.prompt, vaultRoot);
+			const synced = inserted ? await this.syncActiveSessionFromPrompt(trigger.prompt, vaultRoot) : null;
+			if (synced) this.renameAdjacentJcodeCallout(editor, trigger.line, this.getClientDisplayLabel(synced.id, synced.label));
 			if (inserted) new Notice("jcode: done. Inserted response below the trigger line.");
 		} finally {
 			this.currentRequestActive = false;
@@ -480,10 +481,25 @@ export default class JcodePlugin extends Plugin {
 	}
 
 	private async syncActiveSessionFromPrompt(prompt: string, vaultRoot: string) {
-		const hit = this.findLatestSession({ cwd: vaultRoot, prompt });
-		if (!hit || hit.id === this.settings.resumeSessionId) return;
+		// The actual jcode session cwd can be the vault root or a parent cwd after
+		// recovery/resume. The exact user prompt is the stronger source of truth.
+		const hit = this.findLatestSession({ prompt }) || this.findLatestSession({ cwd: vaultRoot, prompt });
+		if (!hit) return null;
+		if (hit.id === this.settings.resumeSessionId) return hit;
 		await this.recordActiveSession(hit.id, hit.label);
 		this.statusBarItem?.setText(`jcode: active client → ${this.getClientDisplayLabel(hit.id, hit.label)}`);
+		return hit;
+	}
+
+	private renameAdjacentJcodeCallout(editor: Editor, triggerLine: number, label: string) {
+		for (let line = triggerLine + 1; line < Math.min(editor.lineCount(), triggerLine + 5); line++) {
+			const text = editor.getLine(line);
+			if (/^> \[!(?:jcode|note|danger)\]\+/.test(text)) {
+				editor.replaceRange(`> [!jcode]+ ${label}`, { line, ch: 0 }, { line, ch: text.length });
+				return;
+			}
+			if (text.trim() && !text.startsWith(">")) return;
+		}
 	}
 
 	private findLatestSession(opts: { cwd?: string; status?: string; prompt?: string }) {

@@ -70,6 +70,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	}
 
 	deps.statusBar.setText("jcode: connecting…");
+	removeExistingJcodeCallout(ctx.editor, line);
 	const liveBlock = insertLiveStatus(ctx.editor, line, title, "thinking…");
 
 	let accumulated = "";
@@ -293,6 +294,23 @@ function insertLiveStatus(
 	return { startLine: insertAtLine, lineCount: block.split("\n").length - 1 };
 }
 
+function removeExistingJcodeCallout(editor: Editor, triggerLine: number) {
+	let start = triggerLine + 1;
+	while (start < editor.lineCount() && editor.getLine(start).trim() === "") start++;
+	const first = editor.getLine(start)?.trim() ?? "";
+	if (!/^> \[!(?:jcode|note|danger)\]\+/.test(first)) return;
+	let end = start + 1;
+	while (end < editor.lineCount()) {
+		const line = editor.getLine(end);
+		if (line.trim() === "" || line.startsWith(">")) {
+			end++;
+			continue;
+		}
+		break;
+	}
+	editor.replaceRange("", { line: triggerLine + 1, ch: 0 }, { line: end, ch: 0 });
+}
+
 function updateLiveTranscript(
 	editor: Editor,
 	live: LiveBlock,
@@ -474,7 +492,7 @@ function parseRawToolLine(line: string): { status: "start" | "end"; text: string
 }
 
 function isToolCommandLine(trimmed: string): boolean {
-	return /^\$\s*/.test(trimmed) || /^[a-z0-9_-]+:\s+\$\s*/i.test(trimmed);
+	return /^\$\s*/.test(trimmed) || /^\[[a-z0-9_-]+\]\s+\$\s*/i.test(trimmed) || /^[a-z0-9_-]+:\s+\$\s*/i.test(trimmed);
 }
 
 function splitFinalAssistantText(raw: string): { feedbacks: string[]; answer: string } {
@@ -518,6 +536,7 @@ function splitFinalAssistantText(raw: string): { feedbacks: string[]; answer: st
 function isToolTreeLine(trimmed: string): boolean {
 	if (/^→?\s*#{1,6}\s*Skill:/i.test(trimmed)) return true;
 	if (/^→?\s*---\s*\[\d+\]/.test(trimmed)) return true;
+	if (/^→\s*$/.test(trimmed)) return true;
 	if (/^ERROR:\s+unknown account alias/i.test(trimmed)) return true;
 	if (/^[┌└│├─]/.test(trimmed)) return true;
 	if (/^[✓✗]\s+/.test(trimmed)) return true;
