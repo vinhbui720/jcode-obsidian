@@ -38,6 +38,9 @@ export default class JcodePlugin extends Plugin {
   private todoTimer: number | null = null;
   private lastSuggestion: TagSuggestion | null = null;
   private dailyBootstrapRunning = false;
+  private globalStateTimer: number | null = null;
+  private commandPollTimer: number | null = null;
+  private commandPollRunning = false;
 
   async onload() {
     await this.loadSettings();
@@ -52,6 +55,8 @@ export default class JcodePlugin extends Plugin {
     this.rebuildTransport();
     this.rebuildAutoTagger();
     this.registerContextBroadcastEvents();
+    this.registerGlobalObsidianStateEvents();
+    this.startObsidianCommandInbox();
 
     this.statusBarItem = this.addStatusBarItem();
     this.statusBarItem.setText("");
@@ -250,6 +255,7 @@ export default class JcodePlugin extends Plugin {
     try {
       this.transport?.cancel();
       await this.broadcaster?.writeOfflineMarker();
+      await this.writeGlobalObsidianState(false);
     } catch (err) {
       console.error("[jcode-obsidian] onunload error:", err);
     }
@@ -896,6 +902,288 @@ export default class JcodePlugin extends Plugin {
       this.app.workspace.on("editor-change", scheduleIfEnabled),
     );
     this.registerEvent(this.app.vault.on("modify", scheduleIfEnabled));
+  }
+
+  private registerGlobalObsidianStateEvents() {
+    const schedule = () => this.scheduleGlobalObsidianStateWrite();
+    this.registerEvent(this.app.workspace.on("active-leaf-change", schedule));
+    this.registerEvent(this.app.workspace.on("file-open", schedule));
+    this.registerEvent(this.app.workspace.on("editor-change", schedule));
+    this.registerEvent(this.app.vault.on("modify", schedule));
+    this.scheduleGlobalObsidianStateWrite();
+  }
+
+  private scheduleGlobalObsidianStateWrite() {
+    if (this.globalStateTimer !== null)
+      window.clearTimeout(this.globalStateTimer);
+    this.globalStateTimer = window.setTimeout(() => {
+      this.globalStateTimer = null;
+      void this.writeGlobalObsidianState(true);
+    }, 250);
+  }
+
+  private async writeGlobalObsidianState(online: boolean) {
+    const filePath = this.globalObsidianStatePath();
+    try {
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await this.atomicWriteJson(
+        filePath,
+        this.buildGlobalObsidianState(online),
+      );
+    } catch (err) {
+      console.error("[jcode-obsidian] global state write failed:", err);
+    }
+  }
+
+  private buildGlobalObsidianState(online: boolean) {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const file = view?.file ?? null;
+    const editor = view?.editor ?? null;
+    const adapter = this.app.vault.adapter as unknown as { basePath?: string };
+    const cursor = editor?.getCursor();
+    const selection = (editor?.getSelection() ?? "").slice(0, 4000);
+    const currentLine = cursor
+      ? editor?.getLine(cursor.line).slice(0, 1000)
+      : "";
+    const cache = file ? this.app.metadataCache.getFileCache(file) : null;
+    const headings = (cache?.headings ?? []).slice(0, 80).map((heading) => ({
+      heading: heading.heading,
+      level: heading.level,
+      line: heading.position.start.line + 1,
+    }));
+    const tags = new Set<string>();
+    for (const tag of cache?.tags ?? []) if (tag.tag) tags.add(tag.tag);
+    const fmTags = cache?.frontmatter?.tags;
+    if (Array.isArray(fmTags)) for (const tag of fmTags) tags.add(`#${tag}`);
+    else if (typeof fmTags === "string") tags.add(`#${fmTags}`);
+
+    return {
+      schema: "jcode.obsidian.current.v1",
+      app: "obsidian",
+      online,
+      updatedAt: new Date().toISOString(),
+      vault: {
+        name: this.app.vault.getName(),
+        root: adapter.basePath ?? "",
+      },
+      activeFile: file
+        ? {
+            path: file.path,
+            basename: file.basename,
+            extension: file.extension,
+            headings,
+            tags: [...tags],
+            frontmatter: cache?.frontmatter ?? null,
+          }
+        : null,
+      cursor: cursor
+        ? {
+            line: cursor.line + 1,
+            column: cursor.ch + 1,
+            currentLine,
+            currentHeading: editor ? this.findCurrentHeading(editor) : null,
+          }
+        : null,
+      selection: {
+        text: selection,
+        truncated: (editor?.getSelection() ?? "").length > selection.length,
+      },
+      openMarkdownTabs: this.listOpenMarkdownTabs(),
+      search: this.readActiveSearchState(),
+      tasks: {
+        dashboardPath: this.settings.tasksDashboardPath,
+        globalFilter: this.settings.tasksGlobalFilter,
+        todoOutputPath: this.settings.todoOutputPath,
+      },
+      jcode: {
+        transport: this.settings.transport,
+        activeSessionId: this.settings.resumeSessionId,
+        activeClient: this.getActiveClientName(),
+      },
+      commandInbox: this.globalObsidianCommandInboxDir(),
+      commandOutbox: this.globalObsidianCommandOutboxDir(),
+    };
+  }
+
+  private listOpenMarkdownTabs() {
+    const workspace = this.app.workspace as unknown as {
+      getLeavesOfType?: (
+        type: string,
+      ) => Array<{ view?: { file?: TFile | null } }>;
+    };
+    return (workspace.getLeavesOfType?.("markdown") ?? [])
+      .map((leaf) => leaf.view?.file)
+      .filter((file): file is TFile => file instanceof TFile)
+      .map((file) => ({ path: file.path, basename: file.basename }))
+      .slice(0, 30);
+  }
+
+  private readActiveSearchState() {
+    const workspace = this.app.workspace as unknown as {
+      getLeavesOfType?: (type: string) => Array<{ view?: unknown }>;
+    };
+    const view = workspace.getLeavesOfType?.("search")?.[0]?.view as
+      | { getState?: () => unknown; searchQuery?: { query?: string } }
+      | undefined;
+    const state = view?.getState?.() as { query?: string } | undefined;
+    return {
+      query: state?.query || view?.searchQuery?.query || "",
+      available: Boolean(view),
+    };
+  }
+
+  private startObsidianCommandInbox() {
+    this.commandPollTimer = window.setInterval(() => {
+      void this.pollObsidianCommandInbox();
+    }, 1000);
+    this.register(() => {
+      if (this.commandPollTimer !== null)
+        window.clearInterval(this.commandPollTimer);
+    });
+  }
+
+  private async pollObsidianCommandInbox() {
+    if (this.commandPollRunning) return;
+    this.commandPollRunning = true;
+    const inbox = this.globalObsidianCommandInboxDir();
+    try {
+      await fs.promises.mkdir(inbox, { recursive: true });
+      await fs.promises.mkdir(this.globalObsidianCommandOutboxDir(), {
+        recursive: true,
+      });
+      const names = (await fs.promises.readdir(inbox))
+        .filter((name) => name.endsWith(".json"))
+        .sort();
+      for (const name of names.slice(0, 5))
+        await this.handleObsidianCommand(path.join(inbox, name));
+    } catch (err) {
+      console.error("[jcode-obsidian] command inbox poll failed:", err);
+    } finally {
+      this.commandPollRunning = false;
+    }
+  }
+
+  private async handleObsidianCommand(commandPath: string) {
+    let command: Record<string, unknown> = {};
+    const id = path.basename(commandPath, ".json");
+    try {
+      command = JSON.parse(
+        await fs.promises.readFile(commandPath, "utf8"),
+      ) as Record<string, unknown>;
+      const result = await this.executeObsidianCommand(command);
+      await this.writeCommandResult(id, { ok: true, result });
+      await fs.promises.rm(commandPath, { force: true });
+      this.scheduleGlobalObsidianStateWrite();
+    } catch (err) {
+      await this.writeCommandResult(id, {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        command,
+      });
+      await fs.promises.rm(commandPath, { force: true });
+    }
+  }
+
+  private async executeObsidianCommand(command: Record<string, unknown>) {
+    const type = String(command.type || "");
+    if (type === "open_file") {
+      const file = this.requireVaultFile(String(command.path || ""));
+      await this.openFile(file);
+      return { opened: file.path };
+    }
+    if (type === "create_note") {
+      const targetPath = this.cleanVaultPath(String(command.path || ""));
+      if (!targetPath.endsWith(".md"))
+        throw new Error("create_note path must end with .md");
+      if (this.app.vault.getAbstractFileByPath(targetPath))
+        throw new Error(`${targetPath} already exists`);
+      await this.ensureFolderPath(path.dirname(targetPath));
+      const file = await this.app.vault.create(
+        targetPath,
+        String(command.content || ""),
+      );
+      await this.openFile(file);
+      return { created: file.path };
+    }
+    if (type === "append_to_file") {
+      const file = this.requireVaultFile(String(command.path || ""));
+      await this.app.vault.append(file, String(command.content || ""));
+      return { appended: file.path };
+    }
+    if (type === "insert_text" || type === "replace_selection") {
+      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (!view) throw new Error("no active markdown editor");
+      if (type === "replace_selection")
+        view.editor.replaceSelection(String(command.content || ""));
+      else
+        view.editor.replaceRange(
+          String(command.content || ""),
+          view.editor.getCursor(),
+        );
+      return { edited: view.file?.path ?? null };
+    }
+    if (type === "run_daily_note") {
+      await this.runDailyNoteBootstrap({ force: true, open: true });
+      return { dailyNote: true };
+    }
+    throw new Error(`unsupported or unsafe command type: ${type}`);
+  }
+
+  private requireVaultFile(vaultPath: string) {
+    const file = this.app.vault.getAbstractFileByPath(
+      this.cleanVaultPath(vaultPath),
+    );
+    if (!(file instanceof TFile)) throw new Error(`${vaultPath} is not a file`);
+    return file;
+  }
+
+  private cleanVaultPath(vaultPath: string) {
+    const clean = vaultPath
+      .replace(/^\/+/, "")
+      .replace(/\.\.\//g, "")
+      .trim();
+    if (!clean) throw new Error("empty vault path");
+    return clean;
+  }
+
+  private async writeCommandResult(
+    id: string,
+    payload: Record<string, unknown>,
+  ) {
+    const resultPath = path.join(
+      this.globalObsidianCommandOutboxDir(),
+      `${id}.json`,
+    );
+    await this.atomicWriteJson(resultPath, {
+      ...payload,
+      id,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  private globalObsidianStateRoot() {
+    const xdgState =
+      process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+    return path.join(xdgState, "jcode", "obsidian");
+  }
+
+  private globalObsidianStatePath() {
+    return path.join(this.globalObsidianStateRoot(), "current.json");
+  }
+
+  private globalObsidianCommandInboxDir() {
+    return path.join(this.globalObsidianStateRoot(), "commands", "inbox");
+  }
+
+  private globalObsidianCommandOutboxDir() {
+    return path.join(this.globalObsidianStateRoot(), "commands", "outbox");
+  }
+
+  private async atomicWriteJson(filePath: string, payload: unknown) {
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    const tmp = `${filePath}.tmp-${process.pid}`;
+    await fs.promises.writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
+    await fs.promises.rename(tmp, filePath);
   }
 
   private resolveActiveMarkdownView(): ViewWithEditor | null {
