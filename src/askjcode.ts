@@ -69,59 +69,54 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 	}
 
 	deps.statusBar.setText("jcode: connecting…");
-	const live = insertLiveStatus(ctx.editor, line, title, "connecting…");
+	const liveBlock = insertLiveStatus(ctx.editor, line, title, "thinking…");
 
 	let accumulated = "";
 	let sessionId = deps.resumeSessionId;
 	let errored = false;
-	const activities = new Map<string, string>();
-	activities.set("connection", "connecting…");
+	const liveState = createLiveState("thinking…");
 
 	const onEvent = (e: JcodeEvent) => {
-				switch (e.type) {
-					case "start":
-						if (e.sessionId) {
-							sessionId = e.sessionId;
-							deps.saveSessionId?.(e.sessionId);
-						}
-						if (statusBarStreaming) {
-							deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
-						}
-						activities.set("connection", `${e.model || e.provider || "ready"} streaming…`);
-						updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
-						break;
-					case "status":
-						if (statusBarStreaming) deps.statusBar.setText(`jcode: ${e.detail}`);
-						activities.set(`status:${activityKey(e.detail)}`, e.detail);
-						updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
-						break;
-					case "delta":
-						accumulated += e.text;
-						if (statusBarStreaming) deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
-						activities.set("writing", `writing… ${accumulated.length} chars`);
-						updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
-						break;
-					case "tool":
-						if (statusBarStreaming) {
-							deps.statusBar.setText(
-								`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
-							);
-						}
-						activities.set(`tool:${e.name || "unknown"}`, `tool ${e.name || "unknown"}: ${e.status === "start" ? "running" : "done"}${e.summary ? ` — ${e.summary}` : ""}`);
-						updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
+			switch (e.type) {
+				case "start":
+					if (e.sessionId) {
+						sessionId = e.sessionId;
+						deps.saveSessionId?.(e.sessionId);
+					}
+					if (statusBarStreaming) {
+						deps.statusBar.setText(`jcode: ${e.model || e.provider || "ready"} streaming…`);
+					}
+					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
+					break;
+				case "status":
+					if (statusBarStreaming) deps.statusBar.setText(`jcode: ${e.detail}`);
+					if (shouldShowLiveStatus(e.detail)) {
+						liveState.toolLine = cleanFeedbackLine(e.detail);
+						updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
+					}
+					break;
+				case "delta":
+					accumulated += e.text;
+					if (statusBarStreaming) deps.statusBar.setText(`jcode: ${accumulated.length} chars…`);
+					break;
+				case "tool":
+					if (statusBarStreaming) {
+						deps.statusBar.setText(
+							`jcode: tool ${e.name} ${e.status === "start" ? "running" : "done"}`
+						);
+					}
+					liveState.toolLine = formatToolLine(e);
+					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 					break;
 				case "end":
 					if (e.text) accumulated = e.text;
 					deps.statusBar.setText("jcode: done");
-					activities.set("connection", "done, inserting answer…");
-					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
 					break;
 				case "error":
 					errored = true;
 					deps.statusBar.setText(`jcode: error`);
-					activities.set("connection", "error");
-					activities.set("error", e.message);
-					updateLiveTranscript(ctx.editor, live, title, accumulated, activities);
+					liveState.toolLine = cleanFeedbackLine(e.message);
+					updateLiveTranscript(ctx.editor, liveBlock, title, liveState);
 					break;
 			}
 		};
@@ -142,7 +137,7 @@ export async function runAskJcode(ctx: AskJcodeContext, deps: AskJcodeDeps): Pro
 			`jcode error: ${err instanceof Error ? err.message : String(err)}`;
 	}
 
-	replaceLiveStatusWithCallout(ctx.editor, live, title, accumulated, errored, activities);
+	replaceLiveStatusWithCallout(ctx.editor, liveBlock, title, accumulated, errored);
 
 	setTimeout(() => deps.statusBar.clear(), 4000);
 	return true;
@@ -232,6 +227,10 @@ interface LiveBlock {
 	lineCount: number;
 }
 
+interface LiveState {
+	toolLine: string;
+}
+
 function insertLiveStatus(
 	editor: Editor,
 	triggerLine: number,
@@ -239,7 +238,7 @@ function insertLiveStatus(
 	status: string
 ): LiveBlock {
 	const insertAtLine = triggerLine + 1;
-	const block = renderLiveBlock(title, "", new Map([["connection", status]]));
+	const block = renderLiveBlock(title, { toolLine: status });
 	editor.replaceRange(block, { line: insertAtLine, ch: 0 }, { line: insertAtLine, ch: 0 });
 	return { startLine: insertAtLine, lineCount: block.split("\n").length - 1 };
 }
@@ -248,10 +247,9 @@ function updateLiveTranscript(
 	editor: Editor,
 	live: LiveBlock,
 	title: string,
-	text: string,
-	activities: Map<string, string>
+	state: LiveState
 ) {
-	const block = renderLiveBlock(title, text, activities);
+	const block = renderLiveBlock(title, state);
 	replaceLiveBlock(editor, live, block);
 }
 
@@ -260,19 +258,19 @@ function replaceLiveStatusWithCallout(
 	live: LiveBlock,
 	title: string,
 	text: string,
-	errored: boolean,
-	activities: Map<string, string>
+	errored: boolean
 ) {
-	const kind = errored ? "danger" : "jcode";
+	const kind = errored ? "danger" : "note";
 	const label = errored ? `${title} error` : title;
-	const safe = text.trim() || (errored ? "(no output)" : "(empty response)");
+	const parsed = splitFinalAssistantText(text);
+	const feedbacks = errored ? [] : parsed.feedbacks;
+	const safe = errored
+		? (text.trim() || "(no output)")
+		: (parsed.answer.trim() || "(empty response)");
 	const lines = [`> [!${kind}]+ ${label}`];
+	for (const feedback of feedbacks) lines.push(`> - ${feedback}`);
+	if (feedbacks.length > 0) lines.push(">");
 	for (const l of safe.split("\n")) lines.push(`> ${l}`);
-	const finalActivities = Array.from(activities.entries()).filter(([k]) => k !== "writing");
-	if (finalActivities.length > 0) {
-		lines.push(">");
-		for (const [, value] of finalActivities) lines.push(`> _jcode: ${value}_`);
-	}
 	replaceLiveBlock(editor, live, `${lines.join("\n")}\n`);
 }
 
@@ -286,17 +284,89 @@ function replaceLiveBlock(editor: Editor, live: LiveBlock, replacement: string) 
 }
 
 function renderStatusBlock(title: string, status: string): string {
-	return `> [!jcode]+ ${title}\n> _jcode: ${status}_\n`;
+	return `> [!note]+ ${title}\n> - ${status}\n`;
 }
 
-function renderLiveBlock(title: string, text: string, activities: Map<string, string>): string {
-	const lines = [`> [!jcode]+ ${title}`];
-	if (text.trim()) {
-		for (const l of text.trimEnd().split("\n")) lines.push(`> ${l}`);
-		lines.push(">");
-	}
-	for (const [, value] of activities) lines.push(`> _jcode: ${value}_`);
+function renderLiveBlock(title: string, state: LiveState): string {
+	const lines = [`> [!note]+ ${title}`];
+	if (state.toolLine.trim()) lines.push(`> - ${state.toolLine.trim()}`);
 	return `${lines.join("\n")}\n`;
+}
+
+function createLiveState(toolLine: string): LiveState {
+	return { toolLine };
+}
+
+function formatToolLine(e: Extract<JcodeEvent, { type: "tool" }>): string {
+	const name = e.name || "tool";
+	const verb = e.status === "start" ? "running" : "done";
+	return `${name}: ${verb}${e.summary ? ` — ${cleanFeedbackLine(e.summary)}` : ""}`;
+}
+
+function shouldShowLiveStatus(detail: string): boolean {
+	const s = detail.trim().toLowerCase();
+	if (!s) return false;
+	if (s.includes("opening websocket")) return false;
+	if (s.includes("persistent jcode client running")) return false;
+	if (s.includes("session_")) return false;
+	return true;
+}
+
+function splitFinalAssistantText(raw: string): { feedbacks: string[]; answer: string } {
+	const lines = raw.replace(/\r/g, "").split("\n");
+	const feedbacks: string[] = [];
+	const answerLines: string[] = [];
+	let currentFeedback: string[] = [];
+	let seenToolTree = false;
+
+	const flushFeedback = () => {
+		const text = cleanFeedbackLine(currentFeedback.join(" "));
+		if (text) feedbacks.push(text);
+		currentFeedback = [];
+	};
+
+	for (const rawLine of lines) {
+		const trimmed = rawLine.trim();
+		if (!trimmed) {
+			if (!seenToolTree && currentFeedback.length > 0) flushFeedback();
+			if (answerLines.length > 0 && answerLines[answerLines.length - 1] !== "") answerLines.push("");
+			continue;
+		}
+		if (isMetricsLine(trimmed)) continue;
+		if (isToolTreeLine(trimmed)) {
+			seenToolTree = true;
+			flushFeedback();
+			continue;
+		}
+		if (seenToolTree) {
+			answerLines.push(trimmed);
+			continue;
+		}
+		currentFeedback.push(trimmed);
+	}
+	flushFeedback();
+	const answer = answerLines.join("\n").trim();
+	if (feedbacks.length === 0 && answer) return { feedbacks: [], answer };
+	if (!answer && feedbacks.length > 0) {
+		const final = feedbacks.pop() ?? "";
+		return { feedbacks, answer: final };
+	}
+	return { feedbacks, answer };
+}
+
+function isToolTreeLine(trimmed: string): boolean {
+	if (/^[┌└│├─]/.test(trimmed)) return true;
+	if (/^[✓✗]\s+/.test(trimmed)) return true;
+	if (/^[│└├].*[✓✗]/.test(trimmed)) return true;
+	return false;
+}
+
+function isMetricsLine(trimmed: string): boolean {
+	return /^\d+(?:\.\d+)?s\s+·\s+/.test(trimmed);
+}
+
+function cleanFeedbackLine(s: string): string {
+	return s.replace(/\s+/g, " ").trim();
 }
 
 function activityKey(s: string): string {
@@ -314,4 +384,12 @@ function findSectionTitle(editor: Editor, triggerLine: number): string | null {
 
 // Exposed for tests.
 export const _parseLine = parseLine;
-export const _internals = { findSectionTitle, renderStatusBlock, renderLiveBlock, activityKey };
+export const _internals = {
+	findSectionTitle,
+	renderStatusBlock,
+	renderLiveBlock,
+	activityKey,
+	shouldShowLiveStatus,
+	formatToolLine,
+	splitFinalAssistantText,
+};

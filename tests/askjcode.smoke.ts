@@ -177,11 +177,41 @@ async function testRunAskJcodeLiveBlock() {
 	);
 	eq(ok, true, "runAsk: returns true");
 	const out = e.getValue();
-	eq(out.includes("> [!jcode]+ Speaking practice"), true, "runAsk: uses nearest heading as title");
+	eq(out.includes("> [!note]+ Speaking practice"), true, "runAsk: uses nearest heading as title");
 	eq(out.includes("> Hello final"), true, "runAsk: inserts final answer");
 	eq(out.includes("_jcode: writing"), false, "runAsk: final replaces live status");
 	eq(out.includes("next"), true, "runAsk: preserves following line");
 	eq(statuses.includes("jcode: connecting…"), true, "runAsk: status bar connecting");
+}
+
+async function testRunAskJcodeNaturalFeedbackTrail() {
+	const e = new FakeEditor("# penguin\n/askjcode launch app");
+	e.cursor = { line: 1, ch: 14 };
+	await runAskJcode(
+		{ editor: e as never, noteText: e.getValue(), notePath: "n.md", vaultRoot: "/tmp" },
+		{
+			transport: {
+				cancel() {},
+				async ask(_opts, on) {
+					on({ type: "status", detail: "opening websocket" });
+					on({ type: "tool", name: "bash", status: "start", summary: "gtk-launch jcode-panel" });
+					on({
+						type: "end",
+						text:
+							"I’m launching it now and checking that the process stays up.\n✓ batch · Launch installed app and verify runtime · 2 calls · 35 tok\n  ✓ bash · $ gtk-launch jcode-panel · 5 tok\n41s · 78.4 tps · ↑77k ↓76",
+					});
+					return { type: "end", text: "I’m launching it now and checking that the process stays up." };
+				},
+			},
+			statusBar: { setText() {}, clear() {} },
+		}
+	);
+	const out = e.getValue();
+	eq(out.includes("> [!note]+ penguin"), true, "runAsk natural: title uses section name");
+	eq(out.includes("> I’m launching it now and checking that the process stays up."), true, "runAsk natural: final answer kept");
+	eq(out.includes("opening websocket"), false, "runAsk natural: transport noise removed");
+	eq(out.includes("✓ batch"), false, "runAsk natural: tool tree removed");
+	eq(out.includes("gtk-launch"), false, "runAsk natural: tool command removed");
 }
 
 async function testRunAskJcodeRespectsStatusBarStreamingToggle() {
@@ -217,16 +247,24 @@ async function testRunAskJcodeRespectsStatusBarStreamingToggle() {
 function testSectionInternals() {
 	const e = new FakeEditor("# Top\ntext\n## Child ##\n/askjcode hi");
 	eq(_internals.findSectionTitle(e as never, 3), "Child", "section title strips trailing hashes");
-	eq(_internals.renderStatusBlock("Child", "connecting…"), "> [!jcode]+ Child\n> _jcode: connecting…_\n", "status block render");
-	const live = _internals.renderLiveBlock("Child", "Hello\nWorld", new Map([
-		["connection", "streaming…"],
-		["tool:bash", "tool bash: running"],
-	]));
-	eq(live.includes("> Hello"), true, "live block includes first feedback line");
-	eq(live.includes("> World"), true, "live block includes later feedback line");
-	eq(live.includes("_jcode: streaming…_"), true, "live block includes status");
-	eq(live.includes("_jcode: tool bash: running_"), true, "live block includes tool status");
+	eq(_internals.renderStatusBlock("Child", "connecting…"), "> [!note]+ Child\n> - connecting…\n", "status block render");
+	const live = _internals.renderLiveBlock("Child", { toolLine: "bash: running" });
+	eq(live.includes("> - bash: running"), true, "live block includes tool line");
 	eq(_internals.activityKey("  A   Status  "), "a status", "activity key normalizes whitespace");
+	eq(_internals.shouldShowLiveStatus("opening websocket"), false, "live status hides websocket noise");
+	eq(_internals.shouldShowLiveStatus("persistent jcode client running: session_x"), false, "live status hides session noise");
+	eq(_internals.shouldShowLiveStatus("thinking hard"), true, "live status keeps meaningful text");
+	eq(_internals.formatToolLine({ type: "tool", name: "bash", status: "start", summary: "gtk-launch" }), "bash: running — gtk-launch", "format tool line");
+	eq(
+		_internals.splitFinalAssistantText("I’m launching it now.\n✓ batch · Launch app\n  ✓ bash · run\n41s · 78.4 tps · ↑77k ↓76"),
+		{ feedbacks: [], answer: "I’m launching it now." },
+		"split final text strips tool tree and metrics"
+	);
+	eq(
+		_internals.splitFinalAssistantText("First feedback.\n\nSecond feedback."),
+		{ feedbacks: ["First feedback."], answer: "Second feedback." },
+		"split final text keeps prior feedbacks and final answer"
+	);
 }
 
 (async () => {
@@ -236,6 +274,7 @@ function testSectionInternals() {
 	testInsertCallout();
 	testSectionInternals();
 	await testRunAskJcodeLiveBlock();
+	await testRunAskJcodeNaturalFeedbackTrail();
 	await testRunAskJcodeRespectsStatusBarStreamingToggle();
 	if (failures > 0) {
 		console.error(`\n${failures} TEST(S) FAILED`);
