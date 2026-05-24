@@ -167,6 +167,7 @@ class ReplTransport implements JcodeTransport {
 	private sessionId = "";
 	private cwd = "";
 	private provider = "";
+	private lineBuffer = "";
 	private pending: {
 		resolve: (e: JcodeEvent) => void;
 		reject: (e: Error) => void;
@@ -238,6 +239,7 @@ class ReplTransport implements JcodeTransport {
 		if (this.provider) args.unshift("-p", this.provider);
 		if (this.cwd) args.unshift("-C", this.cwd);
 		if (this.sessionId) args.push("--resume", this.sessionId);
+		this.lineBuffer = "";
 		this.child = spawn(this.bin, args, {
 			stdio: ["pipe", "pipe", "pipe"],
 			env: { ...process.env, JCODE_NON_INTERACTIVE: "1", COLUMNS: "10000" },
@@ -256,7 +258,21 @@ class ReplTransport implements JcodeTransport {
 	}
 
 	private handleOutput(chunk: string, fallbackOnEvent?: (e: JcodeEvent) => void) {
-		for (const rawLine of chunk.split(/\r?\n/)) {
+		const combined = this.lineBuffer + chunk;
+		const endedWithNewline = /\r?\n$/.test(combined);
+		const rawLines = combined.split(/\r?\n/);
+		if (endedWithNewline) {
+			this.lineBuffer = "";
+			rawLines.pop();
+		} else {
+			this.lineBuffer = rawLines.pop() ?? "";
+			if (this.lineBuffer.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").trim() === ">") {
+				rawLines.push(this.lineBuffer);
+				this.lineBuffer = "";
+			}
+		}
+
+		for (const rawLine of rawLines) {
 			const line = rawLine.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").trim();
 			const pending = this.pending;
 			if (line === ">") {
