@@ -498,14 +498,14 @@ export default class JcodePlugin extends Plugin {
 		return hit;
 	}
 
-	private resolveDisplayTitleFromPrompt(prompt: string, vaultRoot: string) {
+	private async resolveDisplayTitleFromPrompt(prompt: string, vaultRoot: string) {
 		const hit = this.findLatestSession({ prompt }) || this.findLatestSession({ cwd: vaultRoot, prompt });
 		if (!hit) return null;
 		const previousId = this.settings.resumeSessionId;
 		const previousLabel = previousId ? this.getClientDisplayLabel(previousId, this.settings.activeSessionLabel) : "saved section";
 		const nextLabel = this.getClientDisplayLabel(hit.id, hit.label);
 		if (hit.id !== this.settings.resumeSessionId) {
-			void this.recordActiveSession(hit.id, hit.label);
+			await this.recordActiveSession(hit.id, hit.label);
 		}
 		return {
 			title: nextLabel,
