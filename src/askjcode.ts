@@ -315,39 +315,35 @@ function shouldShowLiveStatus(detail: string): boolean {
 
 function splitFinalAssistantText(raw: string): { feedbacks: string[]; answer: string } {
 	const lines = raw.replace(/\r/g, "").split("\n");
-	const feedbacks: string[] = [];
-	const answerLines: string[] = [];
-	let currentFeedback: string[] = [];
-	let seenToolTree = false;
+	const proseSegments: string[] = [];
+	let currentProse: string[] = [];
 
-	const flushFeedback = () => {
-		const text = cleanFeedbackLine(currentFeedback.join(" "));
-		if (text) feedbacks.push(text);
-		currentFeedback = [];
+	const flushProse = () => {
+		const text = normalizeProseBlock(currentProse);
+		if (text) proseSegments.push(text);
+		currentProse = [];
 	};
 
 	for (const rawLine of lines) {
 		const trimmed = rawLine.trim();
 		if (!trimmed) {
-			if (!seenToolTree && currentFeedback.length > 0) flushFeedback();
-			if (answerLines.length > 0 && answerLines[answerLines.length - 1] !== "") answerLines.push("");
+			if (currentProse.length > 0 && currentProse[currentProse.length - 1] !== "") {
+				currentProse.push("");
+			}
 			continue;
 		}
 		if (isMetricsLine(trimmed)) continue;
 		if (isToolTreeLine(trimmed)) {
-			seenToolTree = true;
-			flushFeedback();
+			flushProse();
 			continue;
 		}
-		if (seenToolTree) {
-			answerLines.push(trimmed);
-			continue;
-		}
-		currentFeedback.push(trimmed);
+		currentProse.push(trimmed);
 	}
-	flushFeedback();
-	const answer = answerLines.join("\n").trim();
-	if (feedbacks.length === 0 && answer) return { feedbacks: [], answer };
+	flushProse();
+	if (proseSegments.length === 0) return { feedbacks: [], answer: "" };
+	if (proseSegments.length === 1) return { feedbacks: [], answer: proseSegments[0] };
+	const feedbacks = proseSegments.slice(0, -1);
+	const answer = proseSegments[proseSegments.length - 1] ?? "";
 	if (!answer && feedbacks.length > 0) {
 		const final = feedbacks.pop() ?? "";
 		return { feedbacks, answer: final };
@@ -359,6 +355,10 @@ function isToolTreeLine(trimmed: string): boolean {
 	if (/^[┌└│├─]/.test(trimmed)) return true;
 	if (/^[✓✗]\s+/.test(trimmed)) return true;
 	if (/^[│└├].*[✓✗]/.test(trimmed)) return true;
+	if (/^\[[a-z0-9_-]+\]$/i.test(trimmed)) return true;
+	if (/^tool:\s+/i.test(trimmed)) return true;
+	if (/^\$\s*/.test(trimmed)) return true;
+	if (/^[a-z0-9_-]+:\s+\$\s*/i.test(trimmed)) return true;
 	return false;
 }
 
@@ -368,6 +368,36 @@ function isMetricsLine(trimmed: string): boolean {
 
 function cleanFeedbackLine(s: string): string {
 	return s.replace(/\s+/g, " ").trim();
+}
+
+function normalizeProseBlock(lines: string[]): string {
+	if (lines.length === 0) return "";
+	const pieces: string[] = [];
+	let currentParagraph: string[] = [];
+
+	const flushParagraph = () => {
+		if (currentParagraph.length === 0) return;
+		pieces.push(cleanFeedbackLine(currentParagraph.join(" ")));
+		currentParagraph = [];
+	};
+
+	for (const raw of lines) {
+		const line = raw.trim();
+		if (!line) {
+			flushParagraph();
+			if (pieces.length > 0 && pieces[pieces.length - 1] !== "") pieces.push("");
+			continue;
+		}
+		if (/^[•*-]\s+/.test(line)) {
+			flushParagraph();
+			pieces.push(line);
+			continue;
+		}
+		currentParagraph.push(line);
+	}
+	flushParagraph();
+	while (pieces.length > 0 && pieces[pieces.length - 1] === "") pieces.pop();
+	return pieces.join("\n").trim();
 }
 
 function activityKey(s: string): string {

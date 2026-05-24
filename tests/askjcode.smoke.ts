@@ -282,8 +282,18 @@ function testSectionInternals() {
 	);
 	eq(
 		_internals.splitFinalAssistantText("First feedback.\n\nSecond feedback."),
-		{ feedbacks: ["First feedback."], answer: "Second feedback." },
-		"split final text keeps prior feedbacks and final answer"
+		{ feedbacks: [], answer: "First feedback.\n\nSecond feedback." },
+		"split final text keeps one prose block intact without tool separators"
+	);
+	eq(
+		_internals.splitFinalAssistantText(
+			"Mình sẽ kiểm tra nhanh lịch cá nhân chiều nay rồi tạo event 16:00 nếu không có xung đột rõ ràng.\n[skill_manage]\n\n  tool: bash\n  ✓ bash · Check personal calendar … · 32 tok\n    $ cd ~/.claude/s…-24T17:30:00+\n  ✓ bash · Create personal calenda… · 116 tok\n    $ GOG_KEYRING_PA…00' --to '202\n\nĐã đặt lịch Đi nha sĩ trên calendar cá nhân:\n\n• Hôm nay 16:00-17:00\n• Tài khoản: buiquangvinh720@gmail.com\n• Không thấy xung đột lịch quanh khung giờ này."
+		),
+		{
+			feedbacks: ["Mình sẽ kiểm tra nhanh lịch cá nhân chiều nay rồi tạo event 16:00 nếu không có xung đột rõ ràng."],
+			answer: "Đã đặt lịch Đi nha sĩ trên calendar cá nhân:\n\n• Hôm nay 16:00-17:00\n• Tài khoản: buiquangvinh720@gmail.com\n• Không thấy xung đột lịch quanh khung giờ này.",
+		},
+		"split final text keeps prose before and after skill/tool block"
 	);
 }
 
